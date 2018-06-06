@@ -46,6 +46,13 @@
 #include "util-internal.h"
 #include "event-internal.h"
 
+/********************************************************************************
+ *
+ *                   Token Bucket Configuration Management
+ *
+ ********************************************************************************/
+// zhou: refresh current token number in buckets according to new cfg.
+
 int
 ev_token_bucket_init_(struct ev_token_bucket *bucket,
     const struct ev_token_bucket_cfg *cfg,
@@ -70,6 +77,7 @@ ev_token_bucket_init_(struct ev_token_bucket *bucket,
 	return 0;
 }
 
+// zhou: periodically put token into buckets
 int
 ev_token_bucket_update_(struct ev_token_bucket *bucket,
     const struct ev_token_bucket_cfg *cfg,
@@ -83,6 +91,10 @@ ev_token_bucket_update_(struct ev_token_bucket *bucket,
 	 * roll back. */
 	if (n_ticks == 0 || n_ticks > INT_MAX)
 		return 0;
+
+    // zhou: There is one skill here, the multiplication will easy cause overflow.
+    //       For those potention overflow operation, use *division*
+
 
 	/* Naively, we would say
 		bucket->limit += n_ticks * cfg->rate;
@@ -110,6 +122,7 @@ ev_token_bucket_update_(struct ev_token_bucket *bucket,
 	return 1;
 }
 
+// zhou: read/write events from backend (or timer if read/write be suspend)
 static inline void
 bufferevent_update_buckets(struct bufferevent_private *bev)
 {
@@ -133,11 +146,17 @@ ev_token_bucket_get_tick_(const struct timeval *tv,
 	 * investigate that more.
 	 */
 
+    // zhou: of course, we can also first perform division, then perform "*1000".
+    //       But we will loss actual value here due to accuracy.
+
 	/* We cast to an ev_uint64_t first, since we don't want to overflow
 	 * before we do the final divide. */
 	ev_uint64_t msec = (ev_uint64_t)tv->tv_sec * 1000 + tv->tv_usec / 1000;
 	return (unsigned)(msec / cfg->msec_per_tick);
 }
+
+// zhou: API, init a single bufferevent token bucket, which will be shared between
+//       all bufferevents using it.
 
 struct ev_token_bucket_cfg *
 ev_token_bucket_cfg_new(size_t read_rate, size_t read_burst,
@@ -172,12 +191,16 @@ ev_token_bucket_cfg_new(size_t read_rate, size_t read_burst,
 	return r;
 }
 
+// zhou: Pay attention, do NOT free ev_token_bucket_cfg before all bufferevents
+//       stop using it.
+
 void
 ev_token_bucket_cfg_free(struct ev_token_bucket_cfg *cfg)
 {
 	mm_free(cfg);
 }
 
+// zhou: it's the default buffer size of TCP send/recv buffer size.
 /* Default values for max_single_read & max_single_write variables. */
 #define MAX_SINGLE_READ_DEFAULT 16384
 #define MAX_SINGLE_WRITE_DEFAULT 16384
@@ -222,7 +245,9 @@ bufferevent_get_rlim_max_(struct bufferevent_private *bev, int is_write)
 	 */
 
 	if (bev->rate_limiting->cfg) {
+        // zhou: update tokens in buckets
 		bufferevent_update_buckets(bev);
+        // zhou: updated by tokens
 		max_so_far = LIM(bev->rate_limiting->limit);
 	}
 	if (bev->rate_limiting->group) {
@@ -269,6 +294,7 @@ bufferevent_get_write_max_(struct bufferevent_private *bev)
 	return bufferevent_get_rlim_max_(bev, 1);
 }
 
+// zhou: when received data from underlying, we decreased token numbers
 int
 bufferevent_decrement_read_buckets_(struct bufferevent_private *bev, ev_ssize_t bytes)
 {
@@ -282,10 +308,15 @@ bufferevent_decrement_read_buckets_(struct bufferevent_private *bev, ev_ssize_t 
 		bev->rate_limiting->limit.read_limit -= bytes;
 		if (bev->rate_limiting->limit.read_limit <= 0) {
 			bufferevent_suspend_read_(&bev->bev, BEV_SUSPEND_BW);
+
+            // zhou: we have a timer to refill tokens
 			if (event_add(&bev->rate_limiting->refill_bucket_event,
 				&bev->rate_limiting->cfg->tick_timeout) < 0)
 				r = -1;
 		} else if (bev->read_suspended & BEV_SUSPEND_BW) {
+            // zhou: why it will happen??? It will happen only in refill timer.
+
+            // zhou: we don't always need refill tokens by timer
 			if (!(bev->write_suspended & BEV_SUSPEND_BW))
 				event_del(&bev->rate_limiting->refill_bucket_event);
 			bufferevent_unsuspend_read_(&bev->bev, BEV_SUSPEND_BW);
@@ -556,6 +587,13 @@ bev_group_refill_callback_(evutil_socket_t fd, short what, void *arg)
 	UNLOCK_GROUP(g);
 }
 
+/********************************************************************************
+ *
+ *                   Rate Limitation Initialization
+ *
+ ********************************************************************************/
+// zhou: API
+
 int
 bufferevent_set_rate_limit(struct bufferevent *bev,
     struct ev_token_bucket_cfg *cfg)
@@ -571,12 +609,17 @@ bufferevent_set_rate_limit(struct bufferevent *bev,
 
 	BEV_LOCK(bev);
 
+    // zhou: remove rate limitation for this bufferevent
 	if (cfg == NULL) {
+
+        // zhou: we have been set rate limitation for this bufferevent before.
 		if (bevp->rate_limiting) {
 			rlim = bevp->rate_limiting;
 			rlim->cfg = NULL;
 			bufferevent_unsuspend_read_(bev, BEV_SUSPEND_BW);
 			bufferevent_unsuspend_write_(bev, BEV_SUSPEND_BW);
+
+            // zhou: remove refill timer
 			if (event_initialized(&rlim->refill_bucket_event))
 				event_del(&rlim->refill_bucket_event);
 		}

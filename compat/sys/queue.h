@@ -134,6 +134,7 @@ struct {								\
 	(head)->slh_first = (head)->slh_first->field.sle_next;		\
 } while (0)
 
+// zhou: LIST_HEAD just define a new struct "name" which include struct "type" pointer
 /*
  * List definitions.
  */
@@ -272,9 +273,13 @@ struct {								\
 /*
  * Tail queue definitions.
  */
+// !!!zhou: the reason of using **tqh_last is,
+//          no need to judge whether it is the first element of the queue.
+
 #define TAILQ_HEAD(name, type)						\
 struct name {								\
 	struct type *tqh_first;	/* first element */			\
+    // zhou: address of "tqe_next" or "tqh_first" if empty
 	struct type **tqh_last;	/* addr of last next element */		\
 }
 

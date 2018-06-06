@@ -96,6 +96,7 @@ extern const struct eventop devpollops;
 extern const struct eventop win32ops;
 #endif
 
+// zhou: prioritized "High -> Low"
 /* Array of backends in order of preference. */
 static const struct eventop *eventops[] = {
 #ifdef EVENT__HAVE_EVENT_PORTS
@@ -129,6 +130,7 @@ struct event_base *event_global_current_base_ = NULL;
 
 /* Global state */
 
+// zhou: the magic number, to indicate the events as its argument, is addrss of the memory
 static void *event_self_cbarg_ptr_ = NULL;
 
 /* Prototypes */
@@ -144,6 +146,8 @@ static void event_queue_make_later_events_active(struct event_base *base);
 
 static int evthread_make_base_notifiable_nolock_(struct event_base *base);
 static int event_del_(struct event *ev, int blocking);
+
+////////////////////////////////////////////////////////////////////////////////
 
 #ifdef USE_REINSERT_TIMEOUT
 /* This code seems buggy; only turn it on if we find out what the trouble is. */
@@ -164,6 +168,10 @@ static int	evthread_notify_base(struct event_base *base);
 
 static void insert_common_timeout_inorder(struct common_timeout_list *ctl,
     struct event *ev);
+
+/********************************************************************************
+ *                 Trouble Shooting
+ ********************************************************************************/
 
 #ifndef EVENT__DISABLE_DEBUG_MODE
 /* These functions implement a hashtable of which 'struct event *' structures
@@ -208,7 +216,7 @@ int event_debug_mode_on_ = 0;
  *        to be shared across threads (if thread support is enabled).
  *
  *        When and if evthreads are initialized, this variable will be evaluated,
- *        and if set to something other than zero, this means the evthread setup 
+ *        and if set to something other than zero, this means the evthread setup
  *        functions were called out of order.
  *
  *        See: "Locks and threading" in the documentation.
@@ -224,8 +232,11 @@ static void *event_debug_map_lock_ = NULL;
 static HT_HEAD(event_debug_map, event_debug_entry) global_debug_map =
 	HT_INITIALIZER();
 
+// zhou: declare "HT_XXXX" related functions
 HT_PROTOTYPE(event_debug_map, event_debug_entry, node, hash_debug_entry,
     eq_debug_entry)
+
+// zhou: define "HT_XXXX" related functions
 HT_GENERATE(event_debug_map, event_debug_entry, node, hash_debug_entry,
     eq_debug_entry, 0.5, mm_malloc, mm_realloc, mm_free)
 
@@ -390,6 +401,9 @@ static void event_debug_assert_not_added_(const struct event *ev) { (void)ev; }
  * to monotonic time?  Set this to -1 for 'never.' */
 #define CLOCK_SYNC_INTERVAL 5
 
+// zhou: The reason why not update cache time is, the invoker will put tv_cache as
+//       parameter "tp"
+
 /** Set 'tp' to the current time according to 'base'.  We must hold the lock
  * on 'base'.  If there is a cached time, return it.  Otherwise, use
  * clock_gettime or gettimeofday as appropriate to find out the right time.
@@ -409,10 +423,15 @@ gettime(struct event_base *base, struct timeval *tp)
 		return -1;
 	}
 
+    // zhou: we have to know the "wall clock" time, and compare to "monotonic time"
+    //       every "CLOCK_SYNC_INTERVAL" seconds.
+
 	if (base->last_updated_clock_diff + CLOCK_SYNC_INTERVAL
 	    < tp->tv_sec) {
 		struct timeval tv;
 		evutil_gettimeofday(&tv,NULL);
+
+        // zhou: the gap between "wall clock" and "monotonic time" was updated.
 		evutil_timersub(&tv, tp, &base->tv_clock_diff);
 		base->last_updated_clock_diff = tp->tv_sec;
 	}
@@ -420,6 +439,7 @@ gettime(struct event_base *base, struct timeval *tp)
 	return 0;
 }
 
+// zhou: API
 int
 event_base_gettimeofday_cached(struct event_base *base, struct timeval *tv)
 {
@@ -434,6 +454,7 @@ event_base_gettimeofday_cached(struct event_base *base, struct timeval *tv)
 	if (base->tv_cache.tv_sec == 0) {
 		r = evutil_gettimeofday(tv, NULL);
 	} else {
+        // zhou: Just caculate the mono time depending on diff
 		evutil_timeradd(&base->tv_cache, &base->tv_clock_diff, tv);
 		r = 0;
 	}
@@ -441,6 +462,7 @@ event_base_gettimeofday_cached(struct event_base *base, struct timeval *tv)
 	return r;
 }
 
+// zhou: mark the cached time expired
 /** Make 'base' have no current cached time. */
 static inline void
 clear_time_cache(struct event_base *base)
@@ -448,6 +470,7 @@ clear_time_cache(struct event_base *base)
 	base->tv_cache.tv_sec = 0;
 }
 
+// zhou: API
 /** Replace the cached time in 'base' with the current time. */
 static inline void
 update_time_cache(struct event_base *base)
@@ -474,6 +497,10 @@ event_base_update_cache_time(struct event_base *base)
 	return 0;
 }
 
+/********************************************************************************
+ *                event_base management (create and destroy)
+ ********************************************************************************/
+
 static inline struct event *
 event_callback_to_event(struct event_callback *evcb)
 {
@@ -487,6 +514,7 @@ event_to_event_callback(struct event *ev)
 	return &ev->ev_evcallback;
 }
 
+// zhou: obsolete function of event_base_new()
 struct event_base *
 event_init(void)
 {
@@ -502,6 +530,7 @@ event_init(void)
 	return (base);
 }
 
+// zhou: get the event_base with default value, API
 struct event_base *
 event_base_new(void)
 {
@@ -514,6 +543,7 @@ event_base_new(void)
 	return base;
 }
 
+// zhou: avoided by this user application
 /** Return true iff 'method' is the name of a method that 'cfg' tells us to
  * avoid. */
 static int
@@ -531,6 +561,7 @@ event_config_is_avoided_method(const struct event_config *cfg,
 	return (0);
 }
 
+// zhou: disabled by Env settings.
 /** Return true iff 'method' is disabled according to the environment. */
 static int
 event_is_method_disabled(const char *name)
@@ -587,6 +618,7 @@ event_disable_debug_mode(void)
 #endif
 }
 
+// zhou: advanced entry, API
 struct event_base *
 event_base_new_with_config(const struct event_config *cfg)
 {
@@ -610,6 +642,7 @@ event_base_new_with_config(const struct event_config *cfg)
 	    !(cfg && (cfg->flags & EVENT_BASE_FLAG_IGNORE_ENV));
 
 	{
+        // zhou: both "flags" and "env variable" indicate whether use precise timer
 		struct timeval tmp;
 		int precise_time =
 		    cfg && (cfg->flags & EVENT_BASE_FLAG_PRECISE_TIMER);
@@ -621,25 +654,37 @@ event_base_new_with_config(const struct event_config *cfg)
 			}
 		}
 		flags = precise_time ? EV_MONOT_PRECISE : 0;
+        // zhou: decide which time fetching function will be used
 		evutil_configure_monotonic_time_(&base->monotonic_timer, flags);
 
 		gettime(base, &tmp);
 	}
 
+/////////////////////The next block focus on data structure init////////////////////////
+    // zhou: init "event with timeout" link header
+
 	min_heap_ctor_(&base->timeheap);
 
+    // zhou: signal convert to fd by socketpair, why not use "signalfd()"?
 	base->sig.ev_signal_pair[0] = -1;
 	base->sig.ev_signal_pair[1] = -1;
+
+    // zhou: what's the purpose?
 	base->th_notify_fd[0] = -1;
 	base->th_notify_fd[1] = -1;
 
+    // zhou: defered events callback function queue
 	TAILQ_INIT(&base->active_later_queue);
 
+    // zhou: mapping between fd and concern events
 	evmap_io_initmap_(&base->io);
 	evmap_signal_initmap_(&base->sigmap);
 	event_changelist_init_(&base->changelist);
 
+    // zhou: back-end functions specific data
 	base->evbase = NULL;
+
+///////////////////The next block continues move cfg to event_base//////////////
 
 	if (cfg) {
 		memcpy(&base->max_dispatch_time,
@@ -675,11 +720,14 @@ event_base_new_with_config(const struct event_config *cfg)
 		    event_is_method_disabled(eventops[i]->name))
 			continue;
 
+        // zhou: the method we can use, ignore others methods
 		base->evsel = eventops[i];
 
+        // zhou: init the method we choose
 		base->evbase = base->evsel->init(base);
 	}
 
+    // zhou: worst case, we didn't find any back-end method fullfill the requirements
 	if (base->evbase == NULL) {
 		event_warnx("%s: no event mechanism available",
 		    __func__);
@@ -691,6 +739,7 @@ event_base_new_with_config(const struct event_config *cfg)
 	if (evutil_getenv_("EVENT_SHOW_METHOD"))
 		event_msgx("libevent using: %s", base->evsel->name);
 
+    // zhou: default priority queue number is 1, can be modified after event_base is created
 	/* allocate a single active event queue */
 	if (event_base_priority_init(base, 1) < 0) {
 		event_base_free(base);
@@ -699,16 +748,21 @@ event_base_new_with_config(const struct event_config *cfg)
 
 	/* prepare for threading */
 
+// zhou: compling phase
 #if !defined(EVENT__DISABLE_THREAD_SUPPORT) && !defined(EVENT__DISABLE_DEBUG_MODE)
 	event_debug_created_threadable_ctx_ = 1;
 #endif
 
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
+
+    // zhou: user set callback functions and this event_base need lock
 	if (EVTHREAD_LOCKING_ENABLED() &&
 	    (!cfg || !(cfg->flags & EVENT_BASE_FLAG_NOLOCK))) {
 		int r;
 		EVTHREAD_ALLOC_LOCK(base->th_base_lock, 0);
 		EVTHREAD_ALLOC_COND(base->current_event_cond);
+
+        // zhou: setup mechanism of waking up main thread in other threads
 		r = evthread_make_base_notifiable(base);
 		if (r<0) {
 			event_warnx("%s: Unable to make base notifiable.", __func__);
@@ -726,6 +780,7 @@ event_base_new_with_config(const struct event_config *cfg)
 	return (base);
 }
 
+// zhou: Win specific
 int
 event_base_start_iocp_(struct event_base *base, int n_cpus)
 {
@@ -743,6 +798,7 @@ event_base_start_iocp_(struct event_base *base, int n_cpus)
 #endif
 }
 
+// zhou: Win specific
 void
 event_base_stop_iocp_(struct event_base *base)
 {
@@ -797,6 +853,7 @@ event_base_cancel_single_callback_(struct event_base *base,
 	return result;
 }
 
+// zhou: free memeory allocated by event_base only
 static int event_base_free_queues_(struct event_base *base, int run_finalizers)
 {
 	int deleted = 0, i;
@@ -961,6 +1018,7 @@ const struct eventop nil_eventop = {
 	0, 0, 0
 };
 
+// zhou: it's not easy
 /* reinitialize the event base after a fork */
 int
 event_reinit(struct event_base *base)
@@ -986,6 +1044,8 @@ event_reinit(struct event_base *base)
 		 */
 		base->evsel = &nil_eventop;
 	}
+
+    // zhou: because we use socketpair() which survival after fork()
 
 	/* We need to re-create a new signal-notification fd and a new
 	 * thread-notification fd.  Otherwise, we'll still share those with
@@ -1017,6 +1077,8 @@ event_reinit(struct event_base *base)
 		base->th_notify_fd[1] = -1;
 		event_debug_unassign(&base->th_notify);
 	}
+
+    // zhou: we have done nothing related evsel?
 
 	/* Replace the original evsel. */
         base->evsel = evsel;
@@ -1085,6 +1147,10 @@ event_gettime_monotonic(struct event_base *base, struct timeval *tv)
   return rv;
 }
 
+/********************************************************************************
+ *                        event_config management
+ ********************************************************************************/
+
 const char **
 event_get_supported_methods(void)
 {
@@ -1097,6 +1163,8 @@ event_get_supported_methods(void)
 	for (method = &eventops[0]; *method != NULL; ++method) {
 		++i;
 	}
+
+    // zhou: who will responsible for the memory releas???
 
 	/* allocate one more than we need for the NULL pointer */
 	tmp = mm_calloc((i + 1), sizeof(char *));
@@ -1124,6 +1192,8 @@ event_config_new(void)
 
 	if (cfg == NULL)
 		return (NULL);
+
+    // zhou: initialize "avoid methods" queue. &(cfg->entries)
 
 	TAILQ_INIT(&cfg->entries);
 	cfg->max_dispatch_interval.tv_sec = -1;
@@ -1162,6 +1232,7 @@ event_config_set_flag(struct event_config *cfg, int flag)
 	return 0;
 }
 
+// zhou: set unwanted back-end methods, API
 int
 event_config_avoid_method(struct event_config *cfg, const char *method)
 {
@@ -1189,6 +1260,7 @@ event_config_require_features(struct event_config *cfg,
 	return (0);
 }
 
+// zhou: Win specific
 int
 event_config_set_num_cpus_hint(struct event_config *cfg, int cpus)
 {
@@ -1215,12 +1287,17 @@ event_config_set_max_dispatch_interval(struct event_config *cfg,
 	return (0);
 }
 
+/********************************************************************************
+ *                        event priority management
+ ********************************************************************************/
+// zhou: obsolete, replace by "event_base_priority_init"
 int
 event_priority_init(int npriorities)
 {
 	return event_base_priority_init(current_base, npriorities);
 }
 
+// zhou: should be modified before first call to event_base_dispatch()
 int
 event_base_priority_init(struct event_base *base, int npriorities)
 {
@@ -1229,6 +1306,7 @@ event_base_priority_init(struct event_base *base, int npriorities)
 
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 
+    // zhou: if we already have active events in queues, we can't continue
 	if (N_ACTIVE_CALLBACKS(base) || npriorities < 1
 	    || npriorities >= EVENT_MAX_PRIORITIES)
 		goto err;
@@ -1270,6 +1348,7 @@ event_base_get_npriorities(struct event_base *base)
 		base = current_base;
 
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+    // zhou: we indeed need lock here.
 	n = base->nactivequeues;
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 	return (n);
@@ -1326,6 +1405,11 @@ event_base_get_max_events(struct event_base *base, unsigned int type, int clear)
 	return r;
 }
 
+/********************************************************************************
+ *                   Active Events Handling
+ *  Description: closure, lambda function; just looks like Callback function in C.
+ ********************************************************************************/
+
 /* Returns true iff we're currently watching any events. */
 static int
 event_haveevents(struct event_base *base)
@@ -1364,6 +1448,10 @@ event_signal_closure(struct event_base *base, struct event *ev)
 		}
 	}
 }
+
+//////////////////// Common Timer Management ////////////////////////////////////
+////refer to: Optimizing common timeouts/////////////////////////////////////////
+
 
 /* Common timeouts are special timeouts that are handled as queues rather than
  * in the minheap.  This is more efficient than the minheap if we happen to
@@ -1577,11 +1665,15 @@ event_persist_closure(struct event_base *base, struct event *ev)
 		} else {
 			delay = ev->ev_io_timeout;
 			if (ev->ev_res & EV_TIMEOUT) {
+                // zhou: "ev_timeout" should be minor smaller than "now"
 				relative_to = ev->ev_timeout;
 			} else {
 				relative_to = now;
 			}
 		}
+
+        // zhou: we want to make sure the schedule at this time,  will not impact
+        //       expire time at next time. Except, it's too late this time.
 		evutil_timeradd(&relative_to, &delay, &run_at);
 		if (evutil_timercmp(&run_at, &now, <)) {
 			/* Looks like we missed at least one invocation due to
@@ -1589,9 +1681,11 @@ event_persist_closure(struct event_base *base, struct event *ev)
 			 * while, really slow callbacks, or
 			 * something. Reschedule relative to now.
 			 */
+            // zhou: "ev_timeout" + "ev_io_timeout" < "now", too slow for schedule
 			evutil_timeradd(&now, &delay, &run_at);
 		}
 		run_at.tv_usec |= usec_mask;
+        // zhou: add event for next time
 		event_add_nolock_(ev, &run_at, 1);
 	}
 
@@ -1631,8 +1725,10 @@ event_process_active_single_queue(struct event_base *base,
 			ev = event_callback_to_event(evcb);
 
 			if (ev->ev_events & EV_PERSIST || ev->ev_flags & EVLIST_FINALIZING)
+                // zhou: just remove from "activequeues"
 				event_queue_remove_active(base, evcb);
 			else
+                // zhou: remove this event from state "pending", don't take care.
 				event_del_nolock_(ev, EVENT_DEL_NOBLOCK);
 			event_debug((
 			    "event_process_active: event: %p, %s%s%scall %p",
@@ -1654,6 +1750,7 @@ event_process_active_single_queue(struct event_base *base,
 
 		base->current_event = evcb;
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
+        // zhou: we are begin to handle this event.
 		base->current_event_waiters = 0;
 #endif
 
@@ -1667,6 +1764,8 @@ event_process_active_single_queue(struct event_base *base,
 			event_persist_closure(base, ev);
 			break;
 		case EV_CLOSURE_EVENT: {
+            // zhou: the basic scenario
+
 			void (*evcb_callback)(evutil_socket_t, short, void *);
 			short res;
 			EVUTIL_ASSERT(ev != NULL);
@@ -1677,6 +1776,8 @@ event_process_active_single_queue(struct event_base *base,
 		}
 		break;
 		case EV_CLOSURE_CB_SELF: {
+            // zhou: deferred callback function?
+
 			void (*evcb_selfcb)(struct event_callback *, void *) = evcb->evcb_cb_union.evcb_selfcb;
 			EVBASE_RELEASE_LOCK(base, th_base_lock);
 			evcb_selfcb(evcb, evcb->evcb_arg);
@@ -1712,23 +1813,31 @@ event_process_active_single_queue(struct event_base *base,
 		EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 		base->current_event = NULL;
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
+        // zhou: we are end to handling this event
 		if (base->current_event_waiters) {
 			base->current_event_waiters = 0;
 			EVTHREAD_COND_BROADCAST(base->current_event_cond);
 		}
 #endif
 
+        // zhou: event_base_loopbreak() set this flag
 		if (base->event_break)
 			return -1;
+
+        // zhou: we have reached the max events we have to process
 		if (count >= max_to_process)
 			return count;
-		if (count && endtime) {
+
+        // zhou: it's the time to leave
+        if (count && endtime) {
 			struct timeval now;
 			update_time_cache(base);
 			gettime(base, &now);
 			if (evutil_timercmp(&now, endtime, >=))
 				return count;
 		}
+
+        // zhou: event_base_loopcontinue() set this flag
 		if (base->event_continue)
 			break;
 	}
@@ -1752,18 +1861,25 @@ event_process_active(struct event_base *base)
 	const int maxcb = base->max_dispatch_callbacks;
 	const int limit_after_prio = base->limit_callbacks_after_prio;
 	if (base->max_dispatch_time.tv_sec >= 0) {
+
+        // zhou: update cached time if enabled
 		update_time_cache(base);
+        // zhou: fetch time from cache if has, orelse system.
 		gettime(base, &tv);
+        // zhou: get the time of this processing have to end
 		evutil_timeradd(&base->max_dispatch_time, &tv, &tv);
 		endtime = &tv;
 	} else {
 		endtime = NULL;
 	}
 
+    // zhou: we handle active events from importance to insignificance
 	for (i = 0; i < base->nactivequeues; ++i) {
 		if (TAILQ_FIRST(&base->activequeues[i]) != NULL) {
 			base->event_running_priority = i;
 			activeq = &base->activequeues[i];
+
+            // zhou: higher priority, handle as much as possible
 			if (i < limit_after_prio)
 				c = event_process_active_single_queue(base, activeq,
 				    INT_MAX, NULL);
@@ -1789,7 +1905,7 @@ done:
 /*
  * Wait continuously for events.  We exit only if no events are left.
  */
-
+// zhou: obsolete, replace by "event_base_dispatch()"
 int
 event_dispatch(void)
 {
@@ -1818,6 +1934,7 @@ event_loopexit_cb(evutil_socket_t fd, short what, void *arg)
 	base->event_gotterm = 1;
 }
 
+// zhou: obsolete, replaced by "event_base_loopexit()"
 int
 event_loopexit(const struct timeval *tv)
 {
@@ -1825,6 +1942,7 @@ event_loopexit(const struct timeval *tv)
 		    current_base, tv));
 }
 
+// zhou: Exit the event loop after the specified time
 int
 event_base_loopexit(struct event_base *event_base, const struct timeval *tv)
 {
@@ -1904,6 +2022,7 @@ event_loop(int flags)
 	return event_base_loop(current_base, flags);
 }
 
+// zhou: core handler
 int
 event_base_loop(struct event_base *base, int flags)
 {
@@ -1911,6 +2030,9 @@ event_base_loop(struct event_base *base, int flags)
 	struct timeval tv;
 	struct timeval *tv_p;
 	int res, done, retval = 0;
+
+    // zhou: the lock will be freed just before like "select()" was invoked.
+    //       Very similar to condition variable's mutex lock.
 
 	/* Grab the lock.  We will release it inside evsel.dispatch, and again
 	 * as we invoke user callbacks. */
@@ -1927,6 +2049,7 @@ event_base_loop(struct event_base *base, int flags)
 
 	clear_time_cache(base);
 
+    // zhou: iff there is signal event, we should tell signal.c how to notify event_loop
 	if (base->sig.ev_signal_added && base->sig.ev_n_signals_added)
 		evsig_set_base_(base);
 
@@ -1936,6 +2059,7 @@ event_base_loop(struct event_base *base, int flags)
 	base->th_owner_id = EVTHREAD_GET_ID();
 #endif
 
+    // zhou: these two flags are controlled by event_base_loopexit() and event_base_loopbreak()
 	base->event_gotterm = base->event_break = 0;
 
 	while (!done) {
@@ -1952,9 +2076,15 @@ event_base_loop(struct event_base *base, int flags)
 		}
 
 		tv_p = &tv;
+
+        // zhou: the active events are left over of last processing.
+        //      If we have left over active event, we just check new events coming this time,
+        //      *block* is not allowed.
+
 		if (!N_ACTIVE_CALLBACKS(base) && !(flags & EVLOOP_NONBLOCK)) {
 			timeout_next(base, &tv_p);
 		} else {
+            // zhou: make tv "==" 0, will make select/xxx nonblock
 			/*
 			 * if we have active events, we just poll new events
 			 * without waiting.
@@ -1970,10 +2100,14 @@ event_base_loop(struct event_base *base, int flags)
 			goto done;
 		}
 
+        // zhou: move deferred events to active event queue, but not handing until next dispatch
+        //     it will cause a lot of latency if no more events happen!!!
 		event_queue_make_later_events_active(base);
 
+        // zhou: make it possible to update cached time when user fetch it later
 		clear_time_cache(base);
 
+        // zhou: suspend point
 		res = evsel->dispatch(base, tv_p);
 
 		if (res == -1) {
@@ -1983,11 +2117,15 @@ event_base_loop(struct event_base *base, int flags)
 			goto done;
 		}
 
+        // zhou: forcly update cached time
 		update_time_cache(base);
 
+        // zhou: just move expired timer to active event queue
 		timeout_process(base);
 
+        // zhou: variable "done", means all of the events are handled
 		if (N_ACTIVE_CALLBACKS(base)) {
+            // zhou: user's callback function will be invoked here.
 			int n = event_process_active(base);
 			if ((flags & EVLOOP_ONCE)
 			    && N_ACTIVE_CALLBACKS(base) == 0
@@ -2022,6 +2160,7 @@ event_once_cb(evutil_socket_t fd, short events, void *arg)
 	mm_free(eonce);
 }
 
+// zhou: obsolete, replaced by "event_base_once()"
 /* not threadsafe, event scheduled once. */
 int
 event_once(evutil_socket_t fd, short events,
@@ -2091,6 +2230,12 @@ event_base_once(struct event_base *base, evutil_socket_t fd, short events,
 	return (0);
 }
 
+/********************************************************************************
+ *                      Event Management
+ ********************************************************************************/
+// zhou: event_assign() has similar functionality as event_new(), but
+//       the memory will be allocated by user himself. API.
+
 int
 event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, short events, void (*callback)(evutil_socket_t, short, void *), void *arg)
 {
@@ -2099,20 +2244,29 @@ event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, shor
 	if (arg == &event_self_cbarg_ptr_)
 		arg = ev;
 
+    // zhou: check whether the event was added before, because "ev" maybe passed by user.
 	event_debug_assert_not_added_(ev);
 
+    // zhou: construct a event.
 	ev->ev_base = base;
 
 	ev->ev_callback = callback;
 	ev->ev_arg = arg;
+    // zhou: it will be signal ID if it's sig_event
 	ev->ev_fd = fd;
+    // zhou: EV_TIMEOUT/EV_READ..., there is one internal flag "EV_FINALIZE"
 	ev->ev_events = events;
+    // zhou: happened events to tell callback function
 	ev->ev_res = 0;
+    // zhou: state "initialized"
 	ev->ev_flags = EVLIST_INIT;
+    // zhou: used by signal event
 	ev->ev_ncalls = 0;
 	ev->ev_pncalls = NULL;
 
+    // zhou: ev_closure indicate what to do in callback function
 	if (events & EV_SIGNAL) {
+        // zhou: this is a signal event, FD == signal number, can't be write and read
 		if ((events & (EV_READ|EV_WRITE|EV_CLOSED)) != 0) {
 			event_warnx("%s: EV_SIGNAL is not compatible with "
 			    "EV_READ, EV_WRITE or EV_CLOSED", __func__);
@@ -2122,12 +2276,14 @@ event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, shor
 	} else {
 		if (events & EV_PERSIST) {
 			evutil_timerclear(&ev->ev_io_timeout);
+            // zhou: why we clear timer only here???
 			ev->ev_closure = EV_CLOSURE_EVENT_PERSIST;
 		} else {
 			ev->ev_closure = EV_CLOSURE_EVENT;
 		}
 	}
 
+    // zhou: init timer heap
 	min_heap_elem_init_(ev);
 
 	if (base != NULL) {
@@ -2191,6 +2347,8 @@ event_new(struct event_base *base, evutil_socket_t fd, short events, void (*cb)(
 	ev = mm_malloc(sizeof(struct event));
 	if (ev == NULL)
 		return (NULL);
+
+    // zhou: the difference between event_new() and event_assign() is event allocation
 	if (event_assign(ev, base, fd, events, cb, arg) < 0) {
 		mm_free(ev);
 		return (NULL);
@@ -2199,6 +2357,7 @@ event_new(struct event_base *base, evutil_socket_t fd, short events, void (*cb)(
 	return (ev);
 }
 
+// zhou: free nonthing except event itself
 void
 event_free(struct event *ev)
 {
@@ -2221,6 +2380,10 @@ event_debug_unassign(struct event *ev)
 
 	ev->ev_flags &= ~EVLIST_INIT;
 }
+
+/********************************************************************************
+ *                   Finalize Management
+ ********************************************************************************/
 
 #define EVENT_FINALIZE_FREE_ 0x10000
 static int
@@ -2460,6 +2623,11 @@ event_get_priority(const struct event *ev)
 	return ev->ev_pri;
 }
 
+/********************************************************************************
+ *         Event Management (add, delete, notify, ...)
+ ********************************************************************************/
+// zhou: tv, when we stop care about the event, a period or a absolute time
+
 int
 event_add(struct event *ev, const struct timeval *tv)
 {
@@ -2529,6 +2697,9 @@ evthread_notify_base(struct event_base *base)
 	return base->th_notify_fn(base);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+
 /* Implementation function to remove a timeout on a currently pending event.
  */
 int
@@ -2594,13 +2765,16 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 		 tv ? "EV_TIMEOUT " : " ",
 		 ev->ev_callback));
 
+    // zhou: EVLIST_ALL is a mask for all supported flags
 	EVUTIL_ASSERT(!(ev->ev_flags & ~EVLIST_ALL));
 
+    // zhou: only set by event_finalize(), but for what???
 	if (ev->ev_flags & EVLIST_FINALIZING) {
 		/* XXXX debug */
 		return (-1);
 	}
 
+    // zhou: we need timeout, but never using timeout for this "struct event" before?
 	/*
 	 * prepare for timeout insertion further below, if we get a
 	 * failure on any step, we should not change any state.
@@ -2610,6 +2784,10 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 			1 + min_heap_size_(&base->timeheap)) == -1)
 			return (-1);  /* ENOMEM == errno */
 	}
+
+
+// zhou: when main thread handling signal event, another thread want to add the same
+//      "struct event" again. We should wait for the end of handling in main loop.
 
 	/* If the main thread is currently executing a signal event's
 	 * callback, and we are not the main thread, then we want to wait
@@ -2624,14 +2802,21 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 	}
 #endif
 
+    // zhou: change the I/O event state
 	if ((ev->ev_events & (EV_READ|EV_WRITE|EV_CLOSED|EV_SIGNAL)) &&
 	    !(ev->ev_flags & (EVLIST_INSERTED|EVLIST_ACTIVE|EVLIST_ACTIVE_LATER))) {
 		if (ev->ev_events & (EV_READ|EV_WRITE|EV_CLOSED))
 			res = evmap_io_add_(base, ev->ev_fd, ev);
 		else if (ev->ev_events & EV_SIGNAL)
 			res = evmap_signal_add_(base, (int)ev->ev_fd, ev);
+
+        // zhou: this event was put in I/O list
 		if (res != -1)
 			event_queue_insert_inserted(base, ev);
+
+        // zhou: if here is not main thread, we should wake up main thread to re-fresh which
+        //       events need to care
+
 		if (res == 1) {
 			/* evmap says we need to notify the main thread. */
 			notify = 1;
@@ -2639,6 +2824,7 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 		}
 	}
 
+    // zhou: change the timeout state
 	/*
 	 * we should change the timeout state only if the previous event
 	 * addition succeeded.
@@ -2651,6 +2837,7 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 		int old_timeout_idx;
 #endif
 
+        // zhou: at first time for persist event, we set "ev_io_timeout" (delay)
 		/*
 		 * for persistent timeout events, we remember the
 		 * timeout value and re-add the event.
@@ -2665,6 +2852,8 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 			event_queue_remove_timeout(base, ev);
 		}
 #endif
+
+        // zhou: if we find this event was just activated due to timeout, remove from active queue
 
 		/* Check if it is active due to a timeout.  Rescheduling
 		 * this timeout before the callback can be executed
@@ -2686,21 +2875,28 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 
 		gettime(base, &now);
 
+        // zhou: common timeout used to optimize performance in case timeout value is equal
 		common_timeout = is_common_timeout(tv, base);
 #ifdef USE_REINSERT_TIMEOUT
 		was_common = is_common_timeout(&ev->ev_timeout, base);
 		old_timeout_idx = COMMON_TIMEOUT_IDX(&ev->ev_timeout);
 #endif
 
+        // zhou: absolute time
 		if (tv_is_absolute) {
 			ev->ev_timeout = *tv;
 		} else if (common_timeout) {
+            // zhou: common timeout
+
 			struct timeval tmp = *tv;
 			tmp.tv_usec &= MICROSECONDS_MASK;
 			evutil_timeradd(&now, &tmp, &ev->ev_timeout);
 			ev->ev_timeout.tv_usec |=
 			    (tv->tv_usec & ~MICROSECONDS_MASK);
 		} else {
+            // zhou: normal relative time
+
+            // zhou: now + relative time = expect time
 			evutil_timeradd(&now, tv, &ev->ev_timeout);
 		}
 
@@ -2722,6 +2918,9 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 			}
 		} else {
 			struct event* top = NULL;
+
+            // zhou: if the earliest changed, we should wake up main thread to re-fresh
+
 			/* See if the earliest timeout is now earlier than it
 			 * was before: if so, we will need to tell the main
 			 * thread to wake up earlier than it would otherwise.
@@ -2744,6 +2943,8 @@ event_add_nolock_(struct event *ev, const struct timeval *tv,
 
 	return (res);
 }
+
+////////////////////////////////////////////////////////////////////////////////
 
 static int
 event_del_(struct event *ev, int blocking)
@@ -2781,6 +2982,8 @@ event_del_noblock(struct event *ev)
 	return event_del_(ev, EVENT_DEL_NOBLOCK);
 }
 
+// zhou: the event itself will NOT be freed here
+
 /** Helper for event_del: always called with th_base_lock held.
  *
  * "blocking" must be one of the EVENT_DEL_{BLOCK, NOBLOCK, AUTOBLOCK,
@@ -2812,6 +3015,10 @@ event_del_nolock_(struct event *ev, int blocking)
 
 	EVUTIL_ASSERT(!(ev->ev_flags & ~EVLIST_ALL));
 
+///////////////////////////////////////////////////////////////////////////////
+    // zhou: Make sure we not the callback itself
+
+
 	/* See if we are just active executing this event in a loop */
 	if (ev->ev_events & EV_SIGNAL) {
 		if (ev->ev_ncalls && ev->ev_pncalls) {
@@ -2821,6 +3028,11 @@ event_del_nolock_(struct event *ev, int blocking)
 	}
 
 	if (ev->ev_flags & EVLIST_TIMEOUT) {
+
+        // zhou: unlike the change of read/write event, we should wake up backend
+        //       dispatcher to stop taking care them. Even if we don't wake up
+        //       backend, we will not lose anything.
+
 		/* NOTE: We never need to notify the main thread because of a
 		 * deleted timeout event: all that could happen if we don't is
 		 * that the dispatch loop might wake up too early.  But the
@@ -2876,6 +3088,10 @@ event_del_nolock_(struct event *ev, int blocking)
 
 	return (res);
 }
+
+/********************************************************************************
+ *                   activating event
+ ********************************************************************************/
 
 void
 event_active(struct event *ev, int res, short ncalls)
@@ -3075,6 +3291,11 @@ event_callback_cancel_nolock_(struct event_base *base,
 	return 0;
 }
 
+/********************************************************************************
+ *                Defer Callback Functions
+ ********************************************************************************/
+
+
 void
 event_deferred_cb_init_(struct event_callback *cb, ev_uint8_t priority, deferred_cb_fn fn, void *arg)
 {
@@ -3091,6 +3312,8 @@ event_deferred_cb_set_priority_(struct event_callback *cb, ev_uint8_t priority)
 	cb->evcb_pri = priority;
 }
 
+// zhou: remove all the pending deferred callback??
+
 void
 event_deferred_cb_cancel_(struct event_base *base, struct event_callback *cb)
 {
@@ -3098,6 +3321,8 @@ event_deferred_cb_cancel_(struct event_base *base, struct event_callback *cb)
 		base = current_base;
 	event_callback_cancel_(base, cb);
 }
+
+// zhou: schedule which deferred callback should be run??
 
 #define MAX_DEFERREDS_QUEUED 32
 int
@@ -3118,6 +3343,10 @@ event_deferred_cb_schedule_(struct event_base *base, struct event_callback *cb)
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 	return r;
 }
+
+/********************************************************************************
+ *                      Timer processing
+ ********************************************************************************/
 
 static int
 timeout_next(struct event_base *base, struct timeval **tv_p)
@@ -3171,6 +3400,7 @@ timeout_process(struct event_base *base)
 	gettime(base, &now);
 
 	while ((ev = min_heap_top_(&base->timeheap))) {
+        // zhou: this method will cause each timer be a little delay than expectation.
 		if (evutil_timercmp(&ev->ev_timeout, &now, >))
 			break;
 
@@ -3337,6 +3567,7 @@ insert_common_timeout_inorder(struct common_timeout_list *ctl,
 	    ev_timeout_pos.ev_next_with_common_timeout);
 }
 
+// zhou: make event in state "pending"
 static void
 event_queue_insert_inserted(struct event_base *base, struct event *ev)
 {
@@ -3353,11 +3584,13 @@ event_queue_insert_inserted(struct event_base *base, struct event *ev)
 	ev->ev_flags |= EVLIST_INSERTED;
 }
 
+// zhou: make event in state "active" and put in queue "activequeues"
 static void
 event_queue_insert_active(struct event_base *base, struct event_callback *evcb)
 {
 	EVENT_BASE_ASSERT_LOCKED(base);
 
+    // zhou: when double insertion will happen?
 	if (evcb->evcb_flags & EVLIST_ACTIVE) {
 		/* Double insertion is possible for active events */
 		return;
@@ -3411,6 +3644,7 @@ event_queue_insert_timeout(struct event_base *base, struct event *ev)
 		    get_common_timeout_list(base, &ev->ev_timeout);
 		insert_common_timeout_inorder(ctl, ev);
 	} else {
+        // zhou: why push min-heap here??? operate min-heap not in one place
 		min_heap_push_(&base->timeheap, ev);
 	}
 }
@@ -3429,6 +3663,11 @@ event_queue_make_later_events_active(struct event_base *base)
 		base->n_deferreds_queued += (evcb->evcb_closure == EV_CLOSURE_CB_SELF);
 	}
 }
+
+/********************************************************************************
+ *                  Debugging
+ ********************************************************************************/
+
 
 /* Functions for debugging */
 
@@ -3454,6 +3693,10 @@ event_get_method(void)
 {
 	return (current_base->evsel->name);
 }
+
+/********************************************************************************
+ *                 Memeory Management
+ ********************************************************************************/
 
 #ifndef EVENT__DISABLE_MM_REPLACEMENT
 static void *(*mm_malloc_fn_)(size_t sz) = NULL;
@@ -3558,6 +3801,8 @@ event_set_mem_functions(void *(*malloc_fn)(size_t sz),
 }
 #endif
 
+// zhou: Linux have eventfd()
+
 #ifdef EVENT__HAVE_EVENTFD
 static void
 evthread_notify_drain_eventfd(evutil_socket_t fd, short what, void *arg)
@@ -3655,6 +3900,10 @@ evthread_make_base_notifiable_nolock_(struct event_base *base)
 
 	return event_add_nolock_(&base->th_notify, NULL, 0);
 }
+
+/********************************************************************************
+ *
+ ********************************************************************************/
 
 int
 event_base_foreach_event_nolock_(struct event_base *base,
@@ -3774,6 +4023,7 @@ dump_active_event_fn(const struct event_base *base, const struct event *e, void 
 	return 0;
 }
 
+// zhou: this function is quite similar to event_base_dump_events(), but get what user want to know
 int
 event_base_foreach_event(struct event_base *base,
     event_base_foreach_event_cb fn, void *arg)
@@ -3788,7 +4038,7 @@ event_base_foreach_event(struct event_base *base,
 	return r;
 }
 
-
+// zhou: dump all the events register in event base
 void
 event_base_dump_events(struct event_base *base, FILE *output)
 {

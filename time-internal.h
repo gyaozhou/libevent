@@ -68,6 +68,7 @@ struct evutil_monotonic_timer {
 #endif
 
 #ifdef HAVE_POSIX_MONOTONIC
+    // zhou: the argument will be used by clock_gettime(), indicates mode
 	int monotonic_clock;
 #endif
 

@@ -78,6 +78,9 @@ struct event_change {
 /* Set for adding edge-triggered events. */
 #define EV_CHANGE_ET      EV_ET
 
+// zhou: size of "struct event_changelist_fdinfo", similar to extra data used by poll, used to
+//       store the position in changelist
+
 /* The value of fdinfo_size that a backend should use if it is letting
  * changelist handle its add and delete functions. */
 #define EVENT_CHANGELIST_FDINFO_SIZE sizeof(int)

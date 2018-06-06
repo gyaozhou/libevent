@@ -63,6 +63,14 @@
 #include "event-internal.h"
 #endif
 
+/********************************************************************************
+ *
+ *     listener, show us an example of how to setup/handle a FD without buffer
+ *
+ ********************************************************************************/
+
+// zhou: evconnlistener_event_ops assign all functions' pointers
+
 struct evconnlistener_ops {
 	int (*enable)(struct evconnlistener *);
 	int (*disable)(struct evconnlistener *);
@@ -84,6 +92,7 @@ struct evconnlistener {
 	unsigned enabled : 1;
 };
 
+// zhou: this is a classic structure including event and context, worth to learn
 struct evconnlistener_event {
 	struct evconnlistener base;
 	struct event listener;
@@ -206,6 +215,7 @@ evconnlistener_new(struct event_base *base,
 	return &lev->base;
 }
 
+// zhou: create socket->bind->listen on IP:Port, API.
 struct evconnlistener *
 evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
     void *ptr, unsigned flags, int backlog, const struct sockaddr *sa,
@@ -215,6 +225,8 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 	evutil_socket_t fd;
 	int on = 1;
 	int family = sa ? sa->sa_family : AF_UNSPEC;
+
+    // zhou: new feauture, refer to socket()
 	int socktype = SOCK_STREAM | EVUTIL_SOCK_NONBLOCK;
 
 	if (backlog == 0)
@@ -245,6 +257,7 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 			goto err;
 	}
 
+    // zhou: no more tricky on this function
 	if (sa) {
 		if (bind(fd, sa, socklen)<0)
 			goto err;
@@ -384,6 +397,7 @@ evconnlistener_set_error_cb(struct evconnlistener *lev,
 	UNLOCK(lev);
 }
 
+// zhou: this is the events handling function
 static void
 listener_read_cb(evutil_socket_t fd, short what, void *p)
 {
@@ -448,6 +462,8 @@ listener_read_cb(evutil_socket_t fd, short what, void *p)
 		UNLOCK(lev);
 	}
 }
+
+///////////////////////All of below are Windows specific//////////////////////////////////
 
 #ifdef _WIN32
 struct accepting_socket {

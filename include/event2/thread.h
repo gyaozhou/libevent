@@ -79,6 +79,9 @@ extern "C" {
    @name Types of locks
 
    @{*/
+
+// zhou: lock type will indicate attribute of mutex
+
 /** A recursive lock is one that can be acquired multiple times at once by the
  * same thread.  No other process can allocate the lock until the thread that
  * has been holding it has unlocked it as many times as it locked it. */

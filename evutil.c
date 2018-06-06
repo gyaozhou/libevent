@@ -227,7 +227,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 	ev_socklen_t size;
 	int saved_errno = -1;
 	int family_test;
-	
+
 	family_test = family != AF_INET;
 #ifdef AF_UNIX
 	family_test = family_test && (family != AF_UNIX);
@@ -236,7 +236,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 		EVUTIL_SET_SOCKET_ERROR(ERR(EAFNOSUPPORT));
 		return -1;
 	}
-	
+
 	if (!fd) {
 		EVUTIL_SET_SOCKET_ERROR(ERR(EINVAL));
 		return -1;
@@ -309,6 +309,14 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 #undef ERR
 }
 
+/*******************************************************************************
+ *
+ *
+ *
+ ******************************************************************************/
+// zhou: the difference between fcntl() and setsockopt() is, the former is common to all kinks
+// of fd, but the latter is specific to BSD socket only.
+
 int
 evutil_make_socket_nonblocking(evutil_socket_t fd)
 {
@@ -322,6 +330,7 @@ evutil_make_socket_nonblocking(evutil_socket_t fd)
 	}
 #else
 	{
+        // zhou: don't forget to preserve other flags we want't touch
 		int flags;
 		if ((flags = fcntl(fd, F_GETFL, NULL)) < 0) {
 			event_warn("fcntl(%d, F_GETFL)", fd);
@@ -337,6 +346,8 @@ evutil_make_socket_nonblocking(evutil_socket_t fd)
 #endif
 	return 0;
 }
+
+// zhou: please pay attention, command used here is "F_SETFL", call "File Status flag"
 
 /* Faster version of evutil_make_socket_nonblocking for internal use.
  *
@@ -385,6 +396,7 @@ evutil_make_listen_socket_reuseable_port(evutil_socket_t sock)
 #endif
 }
 
+// zhou: use to prevent attack which will only consume your connection limitation.
 int
 evutil_make_tcp_listen_socket_deferred(evutil_socket_t sock)
 {
@@ -392,13 +404,14 @@ evutil_make_tcp_listen_socket_deferred(evutil_socket_t sock)
 	int one = 1;
 
 	/* TCP_DEFER_ACCEPT tells the kernel to call defer accept() only after data
-	 * has arrived and ready to read */ 
+	 * has arrived and ready to read */
 	return setsockopt(sock, IPPROTO_TCP, TCP_DEFER_ACCEPT, &one,
-		(ev_socklen_t)sizeof(one)); 
+		(ev_socklen_t)sizeof(one));
 #endif
 	return 0;
 }
 
+// zhou: it's easy to forget check existing flags.
 int
 evutil_make_socket_closeonexec(evutil_socket_t fd)
 {
@@ -417,6 +430,8 @@ evutil_make_socket_closeonexec(evutil_socket_t fd)
 #endif
 	return 0;
 }
+
+// zhou: pay attention the cmd used here is "F_SETFD", File Descriptor
 
 /* Faster version of evutil_make_socket_closeonexec for internal use.
  *
@@ -2368,6 +2383,7 @@ evutil_rtrim_lws_(char *str)
 	}
 }
 
+// zhou: why we should check???
 static int
 evutil_issetugid(void)
 {
@@ -2395,6 +2411,12 @@ evutil_getenv_(const char *varname)
 
 	return getenv(varname);
 }
+
+/********************************************************************************
+ *
+ *           How to get Randon Number between 0 and n, google LCG
+ *
+ ********************************************************************************/
 
 ev_uint32_t
 evutil_weakrand_seed_(struct evutil_weakrand_state *state, ev_uint32_t seed)
@@ -2433,6 +2455,8 @@ evutil_weakrand_range_(struct evutil_weakrand_state *state, ev_int32_t top)
 {
 	ev_int32_t divisor, result;
 
+    //zhou: we hope the high part has more impaction on the result in this way
+
 	/* We can't just do weakrand() % top, since the low bits of the LCG
 	 * are less random than the high ones.  (Specifically, since the LCG
 	 * modulus is 2^N, every 2^m for m<N will divide the modulus, and so
@@ -2455,6 +2479,12 @@ evutil_memclear_(void *mem, size_t len)
 {
 	evutil_memset_volatile_(mem, 0, len);
 }
+
+/********************************************************************************
+ *
+ *
+ *
+ ********************************************************************************/
 
 int
 evutil_sockaddr_is_loopback_(const struct sockaddr *addr)
@@ -2511,6 +2541,9 @@ evutil_load_windows_system_library_(const TCHAR *library_name)
 }
 #endif
 
+
+// zhou: this is a small function, but we can get a lot of knowledge here.
+
 /* Internal wrapper around 'socket' to provide Linux-style support for
  * syscall-saving methods where available.
  *
@@ -2524,6 +2557,7 @@ evutil_socket_(int domain, int type, int protocol)
 {
 	evutil_socket_t r;
 #if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
+    // zhou: Since Linux 2.6.27, socket() can set SOCK_NONBLOCK|SOCK_CLOEXEC when creating.
 	r = socket(domain, type, protocol);
 	if (r >= 0)
 		return r;

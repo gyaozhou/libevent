@@ -46,6 +46,10 @@ struct event_base;
 #define EVTHREAD_EXPOSE_STRUCTS
 #endif
 
+////////////////////////////////////////////////////////////////////////////////
+// zhou: Support Thread and NOT Windows
+
+
 #if ! defined(EVENT__DISABLE_THREAD_SUPPORT) && defined(EVTHREAD_EXPOSE_STRUCTS)
 /* Global function pointers to lock-related functions. NULL if locking isn't
    enabled. */
@@ -182,6 +186,10 @@ EVLOCK_TRY_LOCK_(void *lock)
 #define EVTHREAD_LOCKING_ENABLED()		\
 	(evthread_lock_fns_.lock != NULL)
 
+////////////////////////////////////////////////////////////////////////////////
+// zhou: Support Thread and Windows
+
+
 #elif ! defined(EVENT__DISABLE_THREAD_SUPPORT)
 
 unsigned long evthreadimpl_get_id_(void);
@@ -302,6 +310,9 @@ EVLOCK_TRY_LOCK_(void *lock)
 
 #define EVTHREAD_LOCKING_ENABLED()		\
 	(evthreadimpl_locking_enabled_())
+
+////////////////////////////////////////////////////////////////////////////////
+// zhou: NOT Support thread
 
 #else /* EVENT__DISABLE_THREAD_SUPPORT */
 

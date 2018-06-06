@@ -282,6 +282,8 @@ evutil_configure_monotonic_time_(struct evutil_monotonic_timer *base,
 		 * value. */
 		event_errx(1,"I didn't expect CLOCK_MONOTONIC_COARSE to be < 0");
 	}
+
+    // zhou: default value without "EVENT_BASE_FLAG_PRECISE_TIMER" or env setting
 	if (! precise && ! fallback) {
 		if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) == 0) {
 			base->monotonic_clock = CLOCK_MONOTONIC_COARSE;
@@ -309,8 +311,11 @@ evutil_gettime_monotonic_(struct evutil_monotonic_timer *base,
 	struct timespec ts;
 
 	if (base->monotonic_clock < 0) {
+        // zhou: no time-fetching function better than gettimeofday() can be used
 		if (evutil_gettimeofday(tp, NULL) < 0)
 			return -1;
+
+        // zhou: we have to guartantee monotonic by ourselves
 		adjust_monotonic_time(base, tp);
 		return 0;
 	}

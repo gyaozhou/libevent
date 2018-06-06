@@ -38,7 +38,10 @@
 
 typedef struct min_heap
 {
+    // zhou: begin address of pre-allocated (event*)[],
 	struct event** p;
+    // zhou: hole entry index
+    // zhou: the number of pre-allocated
 	unsigned n, a;
 } min_heap_t;
 
@@ -76,6 +79,7 @@ int min_heap_push_(min_heap_t* s, struct event* e)
 	return 0;
 }
 
+// zhou: never be used
 struct event* min_heap_pop_(min_heap_t* s)
 {
 	if (s->n)
@@ -88,11 +92,15 @@ struct event* min_heap_pop_(min_heap_t* s)
 	return 0;
 }
 
+// zhou: the parameter "e" was just inserted.
+//       If it is the smallest value, means the min-heap changed
 int min_heap_elt_is_top_(const struct event *e)
 {
 	return e->ev_timeout_pos.min_heap_idx == 0;
 }
 
+// zhou: remove the event, could be any position in min-heap. Mark the event -1.
+//       It's efficience operation, since we stored the position
 int min_heap_erase_(min_heap_t* s, struct event* e)
 {
 	if (-1 != e->ev_timeout_pos.min_heap_idx)
@@ -158,6 +166,7 @@ void min_heap_shift_up_unconditional_(min_heap_t* s, unsigned hole_index, struct
     (s->p[hole_index] = e)->ev_timeout_pos.min_heap_idx = hole_index;
 }
 
+// zhou: parameter "e" is the newly pushed event
 void min_heap_shift_up_(min_heap_t* s, unsigned hole_index, struct event* e)
 {
     unsigned parent = (hole_index - 1) / 2;
@@ -167,6 +176,10 @@ void min_heap_shift_up_(min_heap_t* s, unsigned hole_index, struct event* e)
 	hole_index = parent;
 	parent = (hole_index - 1) / 2;
     }
+
+    // zhou: the hole_index change to the new position, which the "e" placed.
+    //       Then, update positon of "e"
+
     (s->p[hole_index] = e)->ev_timeout_pos.min_heap_idx = hole_index;
 }
 

@@ -84,10 +84,15 @@
 #endif
 
 struct epollop {
+    // zhou: events array, used for epoll_wait only.
 	struct epoll_event *events;
+    // zhou: size of array
 	int nevents;
+    // zhou: epoll itself fd
 	int epfd;
+
 #ifdef USING_TIMERFD
+    // zhou: if timerfd>0, be used. all timers share one fd
 	int timerfd;
 #endif
 };
@@ -96,6 +101,7 @@ static void *epoll_init(struct event_base *);
 static int epoll_dispatch(struct event_base *, struct timeval *);
 static void epoll_dealloc(struct event_base *);
 
+// zhou: please refer to top of "changelist-internal.h", which explain why we need it.
 static const struct eventop epollops_changelist = {
 	"epoll (with changelist)",
 	epoll_init,
@@ -104,6 +110,8 @@ static const struct eventop epollops_changelist = {
 	epoll_dispatch,
 	epoll_dealloc,
 	1, /* need reinit */
+
+    // zhou: epoll() doesn't support EV_FEATURE_FDS
 	EV_FEATURE_ET|EV_FEATURE_O1| EARLY_CLOSE_IF_HAVE_RDHUP,
 	EVENT_CHANGELIST_FDINFO_SIZE
 };
@@ -148,6 +156,8 @@ epoll_init(struct event_base *base)
 	epfd = epoll_create1(EPOLL_CLOEXEC);
 #endif
 	if (epfd == -1) {
+        // zhou: 32000 just a hint to kernel
+
 		/* Initialize the kernel queue using the old interface.  (The
 		size field is ignored   since 2.6.8.) */
 		if ((epfd = epoll_create(32000)) == -1) {
@@ -172,12 +182,15 @@ epoll_init(struct event_base *base)
 		close(epfd);
 		return (NULL);
 	}
+
+    // zhou: used to hold active fd, the value will be increased when dispatch
 	epollop->nevents = INITIAL_NEVENT;
 
 	if ((base->flags & EVENT_BASE_FLAG_EPOLL_USE_CHANGELIST) != 0 ||
 	    ((base->flags & EVENT_BASE_FLAG_IGNORE_ENV) == 0 &&
 		evutil_getenv_("EVENT_EPOLL_USE_CHANGELIST") != NULL)) {
 
+        // zhou: change backend method
 		base->evsel = &epollops_changelist;
 	}
 
@@ -193,6 +206,7 @@ epoll_init(struct event_base *base)
 		int fd;
 		fd = epollop->timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK|TFD_CLOEXEC);
 		if (epollop->timerfd >= 0) {
+            // zhou: when the timer expired, an event received from fd
 			struct epoll_event epev;
 			memset(&epev, 0, sizeof(epev));
 			epev.data.fd = epollop->timerfd;
@@ -389,6 +403,7 @@ epoll_nochangelist_add(struct event_base *base, evutil_socket_t fd,
 		ch.close_change = EV_CHANGE_ADD |
 		    (events & EV_ET);
 
+    // zhou: we call epoll_ctl() each time
 	return epoll_apply_one_change(base, base->evbase, &ch);
 }
 
@@ -454,6 +469,7 @@ epoll_dispatch(struct event_base *base, struct timeval *tv)
 		}
 	}
 
+    // zhou: go through changelist, and apply them by epoll_ctl().
 	epoll_apply_changes(base);
 	event_changelist_remove_all_(&base->changelist, base);
 
@@ -475,6 +491,7 @@ epoll_dispatch(struct event_base *base, struct timeval *tv)
 	event_debug(("%s: epoll_wait reports %d", __func__, res));
 	EVUTIL_ASSERT(res <= epollop->nevents);
 
+    // zhou: we checked the return value
 	for (i = 0; i < res; i++) {
 		int what = events[i].events;
 		short ev = 0;

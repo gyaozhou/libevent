@@ -116,6 +116,7 @@ static void __cdecl evsig_handler(int sig);
 #define EVSIGBASE_LOCK() EVLOCK_LOCK(evsig_base_lock, 0)
 #define EVSIGBASE_UNLOCK() EVLOCK_UNLOCK(evsig_base_lock, 0)
 
+// zhou: what's the purpose of set local base
 void
 evsig_set_base_(struct event_base *base)
 {
@@ -195,6 +196,7 @@ evsig_init_(struct event_base *base)
 	base->sig.sh_old = NULL;
 	base->sig.sh_old_max = 0;
 
+    //zhou: register signal socket-pair FD
 	event_assign(&base->sig.ev_signal, base, base->sig.ev_signal_pair[0],
 		EV_READ | EV_PERSIST, evsig_cb, base);
 

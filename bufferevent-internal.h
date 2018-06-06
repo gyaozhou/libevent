@@ -54,7 +54,7 @@ extern "C" {
 /* These flags are reasons that we might be declining to actually enable
    reading or writing on a bufferevent.
  */
-
+// zhou: different reasons for stop reading/writing
 /* On a all bufferevents, for reading: used when we have read up to the
    watermark value.
 
@@ -82,6 +82,8 @@ struct bufferevent_rate_limit_group {
 	/** Current limits for the group. */
 	struct ev_token_bucket rate_limit;
 	struct ev_token_bucket_cfg rate_limit_cfg;
+
+    // zhou: used to control send/recv rate.
 
 	/** True iff we don't want to read from any member of the group.until
 	 * the token bucket refills.  */
@@ -138,12 +140,16 @@ struct bufferevent_rate_limit {
 	 * only rate-limited on its own. */
 	struct bufferevent_rate_limit_group *group;
 
+    // zhou: dynamic bucket token status
 	/* This bufferevent's current limits. */
 	struct ev_token_bucket limit;
+
+    // zhou: can be shared between bufferevents
 	/* Pointer to the rate-limit configuration for this bufferevent.
 	 * Can be shared.  XXX reference-count this? */
 	struct ev_token_bucket_cfg *cfg;
 
+    // zhou: cb function: bev_refill_callback_()
 	/* Timeout event used when one this bufferevent's buckets are
 	 * empty. */
 	struct event refill_bucket_event;
@@ -152,9 +158,14 @@ struct bufferevent_rate_limit {
 /** Parts of the bufferevent structure that are shared among all bufferevent
  * types, but not exposed in bufferevent_struct.h. */
 struct bufferevent_private {
+
+    // zhou: In order to NOT expose more than "struct bufferevent", here use
+    //       another "struct bufferevent_private", and "bev" at the begining.
 	/** The underlying bufferevent structure. */
 	struct bufferevent bev;
 
+    // zhou: use register/deregister read event in backend accroding to read high watermark
+    //       The watermark can NOT impact the write event in backend.
 	/** Evbuffer callback to enforce watermarks on input. */
 	struct evbuffer_cb_entry *read_watermarks_cb;
 
@@ -202,10 +213,12 @@ struct bufferevent_private {
 	/** Current reference count for this bufferevent. */
 	int refcnt;
 
+    // zhou: in this way, threads can access the buffers.
 	/** Lock for this bufferevent.  Shared by the inbuf and the outbuf.
 	 * If NULL, locking is disabled. */
 	void *lock;
 
+    // zhou: In order to avoid make other fd starvation
 	/** No matter how big our bucket gets, don't try to read more than this
 	 * much in a single read operation. */
 	ev_ssize_t max_single_read;
@@ -246,6 +259,7 @@ union bufferevent_ctrl_data {
 	evutil_socket_t fd;
 };
 
+// zhou: like different backend methods, here define different bufferevent
 /**
    Implementation table for a bufferevent: holds function pointers and other
    information to make the various bufferevent types work.

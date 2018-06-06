@@ -53,13 +53,25 @@
 #include "evthread-internal.h"
 #include "time-internal.h"
 
+// zhou: the difference between select() and poll() is,
+//       *select()*, using fd_set which is a bitmap of corresponding "fd" number. So the bitmap
+//       should accomdate all the fd number even if they are not continous. By the fd, we could
+//       easily find the event state.
+//       *poll()*, using pollfd which is a array of all the "fd", the index has no relationship
+//       with the fd number. You have to re-arrange the whole array if you want to delete one.
+//       You have to search one by one of the array, if you want modify events of fd.
+
 struct pollidx {
+    // zhou: used to save the position of array with offset +1.
+    //       The purpose of +1, after malloc, this value is "0", which is a valid index of array
 	int idxplus1;
 };
 
 struct pollop {
 	int event_count;		/* Highest number alloc */
 	int nfds;			/* Highest number used */
+
+    // zhou: a flag of updating event_set_copy according to event_set
 	int realloc_copy;		/* True iff we must realloc
 					 * event_set_copy */
 	struct pollfd *event_set;
@@ -81,6 +93,7 @@ const struct eventop pollops = {
 	poll_dealloc,
 	0, /* doesn't need_reinit */
 	EV_FEATURE_FDS,
+    // zhou: special for this method
 	sizeof(struct pollidx),
 };
 
@@ -140,6 +153,8 @@ poll_dispatch(struct event_base *base, struct timeval *tv)
 		 * let other threads modify the main event_set while we're
 		 * polling. If we're not multithreaded, then we'll skip the
 		 * copy step here to save memory and time. */
+
+        // zhou: because poll() will not modify orignial fd/events, unlike select() did.
 		if (pop->realloc_copy) {
 			struct pollfd *tmp = mm_realloc(pop->event_set_copy,
 			    pop->event_count * sizeof(struct pollfd));
@@ -198,6 +213,7 @@ poll_dispatch(struct event_base *base, struct timeval *tv)
 		res = 0;
 
 		/* If the file gets closed notify */
+        // zhou: for exception, you have to handle it even if you didn't put it events
 		if (what & (POLLHUP|POLLERR|POLLNVAL))
 			what |= POLLIN|POLLOUT;
 		if (what & POLLIN)
@@ -250,9 +266,12 @@ poll_add(struct event_base *base, int fd, short old, short events, void *idx_)
 
 	i = idx->idxplus1 - 1;
 
+    // zhou: we have concerned with other events of this fd before.
 	if (i >= 0) {
 		pfd = &pop->event_set[i];
 	} else {
+        // zhou: this is totally new fd, idxplus1 default is "0"
+
 		i = pop->nfds++;
 		pfd = &pop->event_set[i];
 		pfd->events = 0;
@@ -298,6 +317,8 @@ poll_del(struct event_base *base, int fd, short old, short events, void *idx_)
 	if (events & EV_WRITE)
 		pfd->events &= ~POLLOUT;
 	poll_check_ok(pop);
+
+    // zhou: we still concern other events of this fd
 	if (pfd->events)
 		/* Another event cares about that fd. */
 		return (0);
@@ -313,7 +334,9 @@ poll_del(struct event_base *base, int fd, short old, short events, void *idx_)
 		 */
 		memcpy(&pop->event_set[i], &pop->event_set[pop->nfds],
 		       sizeof(struct pollfd));
-		idx = evmap_io_get_fdinfo_(&base->io, pop->event_set[i].fd);
+
+        // zhou: we have to adjust the index info stored in extra space next to evmap_io
+        idx = evmap_io_get_fdinfo_(&base->io, pop->event_set[i].fd);
 		EVUTIL_ASSERT(idx);
 		EVUTIL_ASSERT(idx->idxplus1 == pop->nfds + 1);
 		idx->idxplus1 = i + 1;

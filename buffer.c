@@ -406,6 +406,7 @@ evbuffer_incref_and_lock_(struct evbuffer *buf)
 	++buf->refcnt;
 }
 
+// zhou: pay attention to the parameter "struct event_base"
 int
 evbuffer_defer_callbacks(struct evbuffer *buffer, struct event_base *base)
 {
@@ -3165,9 +3166,9 @@ evbuffer_file_segment_free(struct evbuffer_file_segment *seg)
 	if ((seg->flags & EVBUF_FS_CLOSE_ON_FREE) && seg->fd >= 0) {
 		close(seg->fd);
 	}
-	
+
 	if (seg->cleanup_cb) {
-		(*seg->cleanup_cb)((struct evbuffer_file_segment const*)seg, 
+		(*seg->cleanup_cb)((struct evbuffer_file_segment const*)seg,
 		    seg->flags, seg->cleanup_cb_arg);
 		seg->cleanup_cb = NULL;
 		seg->cleanup_cb_arg = NULL;

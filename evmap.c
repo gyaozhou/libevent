@@ -56,8 +56,12 @@
 	write on a given fd, and the number of each.
   */
 struct evmap_io {
+    // zhou: list of "struct event"
 	struct event_dlist events;
+    // zhou: check the events in list has the same read/write events here.
+    // zhou: record how many times EV_READ was added
 	ev_uint16_t nread;
+    // zhou: record how many times EV_WRITE was added
 	ev_uint16_t nwrite;
 	ev_uint16_t nclose;
 };
@@ -67,6 +71,10 @@ struct evmap_io {
 struct evmap_signal {
 	struct event_dlist events;
 };
+
+
+////////////////////////////// Windows Begin: //////////////////////////////////
+
 
 /* On some platforms, fds start at 0 and increment by 1 as they are
    allocated, and old numbers get used.  For these platforms, we
@@ -155,6 +163,9 @@ void evmap_io_clear_(struct event_io_map *ctx)
 }
 #endif
 
+/////////////////////////////////// Windows End /////////////////////////////////////////
+
+
 /* Set the variable 'x' to the field in event_map 'map' with fields of type
    'struct type *' corresponding to the fd or signal 'slot'.  Set 'x' to NULL
    if there are no entries for 'slot'.  Does no bounds-checking. */
@@ -177,6 +188,9 @@ void evmap_io_clear_(struct event_io_map *ctx)
 		(x) = (struct type *)((map)->entries[slot]);		\
 	} while (0)
 
+/////////////////////////////// Linux Begin: //////////////////////////////////////////////
+
+// zhou: this is Linux or similar
 /* If we aren't using hashtables, then define the IO_SLOT macros and functions
    as thin aliases over the SIGNAL_SLOT versions. */
 #ifndef EVMAP_USE_HT
@@ -184,6 +198,8 @@ void evmap_io_clear_(struct event_io_map *ctx)
 #define GET_IO_SLOT_AND_CTOR(x,map,slot,type,ctor,fdinfo_len)	\
 	GET_SIGNAL_SLOT_AND_CTOR(x,map,slot,type,ctor,fdinfo_len)
 #define FDINFO_OFFSET sizeof(struct evmap_io)
+
+// zhou: in Linux, IO events will be handled in list like signal did.
 void
 evmap_io_initmap_(struct event_io_map* ctx)
 {
@@ -196,6 +212,7 @@ evmap_io_clear_(struct event_io_map* ctx)
 }
 #endif
 
+//////////////////////////////// Linux End ////////////////////////////////////////////////
 
 /** Expand 'map' with new entries of width 'msize' until it is big enough
 	to store a value in 'slot'.
@@ -210,10 +227,12 @@ evmap_make_space(struct event_signal_map *map, int slot, int msize)
 		while (nentries <= slot)
 			nentries <<= 1;
 
+        // zhou!!!: pay attention, "tmp" may not equal to "map->entries", risk of performance
 		tmp = (void **)mm_realloc(map->entries, nentries * msize);
 		if (tmp == NULL)
 			return (-1);
 
+        // zhou: don't forget init the new part of memory.
 		memset(&tmp[map->nentries], 0,
 		    (nentries - map->nentries) * msize);
 
@@ -283,9 +302,12 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 			return (-1);
 	}
 #endif
+
+    // zhou: get, or create if failed to find
 	GET_IO_SLOT_AND_CTOR(ctx, io, fd, evmap_io, evmap_io_init,
 						 evsel->fdinfo_len);
 
+    // zhou: if the fd was added to ev_io_map before.
 	nread = ctx->nread;
 	nwrite = ctx->nwrite;
 	nclose = ctx->nclose;
@@ -323,7 +345,11 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 	}
 
 	if (res) {
+        // zhou: we malloc for struct eventop.fdinfo_len
 		void *extra = ((char*)ctx) + sizeof(struct evmap_io);
+
+        // zhou: put the event in backend function
+
 		/* XXX(niels): we cannot mix edge-triggered and
 		 * level-triggered, we should probably assert on
 		 * this. */
@@ -393,6 +419,8 @@ evmap_io_del_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 
 	if (res) {
 		void *extra = ((char*)ctx) + sizeof(struct evmap_io);
+
+        // zhou: backend dispatcher still using old one, we should wait it up
 		if (evsel->del(base, ev->ev_fd, old, res, extra) == -1) {
 			retval = -1;
 		} else {
@@ -408,6 +436,7 @@ evmap_io_del_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 	return (retval);
 }
 
+// zhou: all backend will notify base loop the active event by this function.
 void
 evmap_io_active_(struct event_base *base, evutil_socket_t fd, short events)
 {
@@ -689,6 +718,7 @@ evmap_delete_all_(struct event_base *base)
  * signal using the changelist, of where its entry in the changelist is.
  */
 struct event_changelist_fdinfo {
+    // zhou: similar to poll()
 	int idxplus1; /* this is the index +1, so that memset(0) will make it
 		       * a no-such-element */
 };
@@ -810,6 +840,7 @@ event_changelist_grow(struct event_changelist *changelist)
 	if (EVUTIL_UNLIKELY(new_changes == NULL))
 		return (-1);
 
+    // zhou: don't forget to update the address
 	changelist->changes = new_changes;
 	changelist->changes_size = new_size;
 
@@ -828,6 +859,7 @@ event_changelist_get_or_construct(struct event_changelist *changelist,
 {
 	struct event_change *change;
 
+    // zhou: the fd didn't have never been put in changelist before.
 	if (fdinfo->idxplus1 == 0) {
 		int idx;
 		EVUTIL_ASSERT(changelist->n_changes <= changelist->changes_size);
@@ -845,6 +877,7 @@ event_changelist_get_or_construct(struct event_changelist *changelist,
 		change->fd = fd;
 		change->old_events = old_events;
 	} else {
+        // zhou: the fd has been in changelist
 		change = &changelist->changes[fdinfo->idxplus1 - 1];
 		EVUTIL_ASSERT(change->fd == fd);
 	}
@@ -1052,4 +1085,3 @@ evmap_foreach_event_(struct event_base *base,
 		return r;
 	return evmap_signal_foreach_signal(base, evmap_signal_foreach_event_fn, &h);
 }
-

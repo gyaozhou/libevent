@@ -54,13 +54,25 @@ extern "C" {
 /* For evkeyvalq */
 #include <event2/keyvalq_struct.h>
 
+////////////////////////////////////////////////////////////////////////////////
+// zhou: these flag used in "struct event", to preserve its state in "event_base"
+
+// zhou: state "pending" and "min-heap"
 #define EVLIST_TIMEOUT	    0x01
+// zhou: state "pending" and "evmap_io"
 #define EVLIST_INSERTED	    0x02
+// zhou: not be used
 #define EVLIST_SIGNAL	    0x04
+// zhou: state "active" and "activequeues"
 #define EVLIST_ACTIVE	    0x08
+// zhou: internal event like "notify main thread"
 #define EVLIST_INTERNAL	    0x10
+// zhou: state "active" and "active_later_queue"
 #define EVLIST_ACTIVE_LATER 0x20
+// zhou: performing finalizing??o
 #define EVLIST_FINALIZING   0x40
+// zhou: only be removed and meaningfull in debug mode, to mark event useless
+// zhou: state "initialized"
 #define EVLIST_INIT	    0x80
 
 #define EVLIST_ALL          0xff
@@ -106,12 +118,17 @@ struct event;
 
 struct event_callback {
 	TAILQ_ENTRY(event_callback) evcb_active_next;
+
+    // zhou: what's this event state in event_base.
 	short evcb_flags;
 	ev_uint8_t evcb_pri;	/* smaller numbers are higher priority */
+
+    // zhou: indicate which callback function below, will be used
 	ev_uint8_t evcb_closure;
 	/* allows us to adopt for different types of events */
         union {
 		void (*evcb_callback)(evutil_socket_t, short, void *);
+        // zhou: used to defer callback function be invoked
 		void (*evcb_selfcb)(struct event_callback *, void *);
 		void (*evcb_evfinalize)(struct event *, void *);
 		void (*evcb_cbfinalize)(struct event_callback *, void *);
@@ -126,11 +143,14 @@ struct event {
 	/* for managing timeouts */
 	union {
 		TAILQ_ENTRY(event) ev_next_with_common_timeout;
+        // zhou: this timeout event's position in event_base. min_heap
 		int min_heap_idx;
 	} ev_timeout_pos;
 	evutil_socket_t ev_fd;
 
+    // zhou: events set when event_new()
 	short ev_events;
+    // zhou: what happend used in callback function be invocked
 	short ev_res;		/* result passed to event callback */
 
 	struct event_base *ev_base;
@@ -139,6 +159,7 @@ struct event {
 		/* used for io events */
 		struct {
 			LIST_ENTRY (event) ev_io_next;
+            // zhou: NOT absolute time, this is a delay
 			struct timeval ev_timeout;
 		} ev_io;
 
@@ -151,7 +172,7 @@ struct event {
 		} ev_signal;
 	} ev_;
 
-
+    // zhou: the expect absolute time
 	struct timeval ev_timeout;
 };
 
@@ -165,7 +186,7 @@ TAILQ_HEAD (event_list, event);
 #undef TAILQ_HEAD
 #endif
 
-LIST_HEAD (event_dlist, event); 
+LIST_HEAD (event_dlist, event);
 
 #ifdef EVENT_DEFINED_LISTENTRY_
 #undef LIST_ENTRY

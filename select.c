@@ -60,6 +60,13 @@
 #include "evmap-internal.h"
 
 #ifndef EVENT__HAVE_FD_MASK
+
+//zhou: All of the below, is a workaround to exceed the limitation of FD_SETSIZE(1024 in normal),
+//      and it's quite similar to the way sys/types.h used in glibc.
+//      But it's not encoughed by somebody, the alternative is:
+//                  FD_SET(fd%FD_SETSIZE, &fds_array[fd/FD_SETSIZE])
+
+
 /* This type is mandatory, but Android doesn't define it. */
 typedef unsigned long fd_mask;
 #endif
@@ -68,6 +75,7 @@ typedef unsigned long fd_mask;
 #define NFDBITS (sizeof(fd_mask)*8)
 #endif
 
+//zhou: caculate group number, each group can hold y bits, each bits stand for one event
 /* Divide positive x by y, rounding up. */
 #define DIV_ROUNDUP(x, y)   (((x)+((y)-1))/(y))
 
@@ -77,10 +85,16 @@ typedef unsigned long fd_mask;
 
 struct selectop {
 	int event_fds;		/* Highest fd in fd set */
+    //zhou: number of byte to accomodate event mask
 	int event_fdsz;
+    //zhou: flag to indicate fd_set changes
 	int resize_out_sets;
+
+    // zhou: these fd_sets will be kept
 	fd_set *event_readset_in;
 	fd_set *event_writeset_in;
+
+    // zhou: these fd_sets will be updated by select
 	fd_set *event_readset_out;
 	fd_set *event_writeset_out;
 };
@@ -114,13 +128,18 @@ select_init(struct event_base *base)
 	if (!(sop = mm_calloc(1, sizeof(struct selectop))))
 		return (NULL);
 
+    //zhou: we set default events number as (32+1),
+    //      "1" is very important, we must make sure "fd" < bit number of "fd_set"
 	if (select_resize(sop, SELECT_ALLOC_SIZE(32 + 1))) {
 		select_free_selectop(sop);
 		return (NULL);
 	}
 
+    //zhou: register signal socket-pair FD
+    //      we always register the socket even if no user be care of signal
 	evsig_init_(base);
 
+    //zhou: just generate a seed
 	evutil_weakrand_seed_(&base->weakrand_seed, 0);
 
 	return (sop);
@@ -142,10 +161,16 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 	int res=0, i, j, nfds;
 	struct selectop *sop = base->evbase;
 
+    //zhou: nothing. Just for protect select specific data
 	check_selectop(sop);
+
+    // zhou: fd_set size changed, the "event_xxxset_out" should follow "event_xxxset_in"
 	if (sop->resize_out_sets) {
 		fd_set *readset_out=NULL, *writeset_out=NULL;
 		size_t sz = sop->event_fdsz;
+
+        // zhou: pay attention again, the memory maybe moved, so we should update
+        //       "sop->event_readset_out"
 		if (!(readset_out = mm_realloc(sop->event_readset_out, sz)))
 			return (-1);
 		sop->event_readset_out = readset_out;
@@ -160,6 +185,7 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 		sop->resize_out_sets = 0;
 	}
 
+    //zhou: update FD sets we are using
 	memcpy(sop->event_readset_out, sop->event_readset_in,
 	       sop->event_fdsz);
 	memcpy(sop->event_writeset_out, sop->event_writeset_in,
@@ -169,6 +195,8 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 
+    //zhou: why not care about exceptfds?
+    //      nfds, give select() a hint to know the boundary of readset and writeset
 	res = select(nfds, sop->event_readset_out,
 	    sop->event_writeset_out, NULL, tv);
 
@@ -178,6 +206,7 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 
 	if (res == -1) {
 		if (errno != EINTR) {
+            // zhou: In normal, due to  wrong fd which closed by accident
 			event_warn("select");
 			return (-1);
 		}
@@ -188,7 +217,13 @@ select_dispatch(struct event_base *base, struct timeval *tv)
 	event_debug(("%s: select reports %d", __func__, res));
 
 	check_selectop(sop);
+
+    //zhou: we got "i" between 0~nfds randomly in this way, then we can make sequence of
+    //      processing events is indepented with fd number.
 	i = evutil_weakrand_range_(&base->weakrand_seed, nfds);
+
+    //zhou: why not check the res, the sum of total active events??? It will save a lot of
+    //      CPU time.
 	for (j = 0; j < nfds; ++j) {
 		if (++i >= nfds)
 			i = 0;
@@ -232,6 +267,7 @@ select_resize(struct selectop *sop, int fdsz)
 	sop->event_writeset_in = writeset_in;
 	sop->resize_out_sets = 1;
 
+    // zhou: memset the new malloc part
 	memset((char *)sop->event_readset_in + sop->event_fdsz, 0,
 	    fdsz - sop->event_fdsz);
 	memset((char *)sop->event_writeset_in + sop->event_fdsz, 0,
@@ -252,6 +288,8 @@ static int
 select_add(struct event_base *base, int fd, short old, short events, void *p)
 {
 	struct selectop *sop = base->evbase;
+
+// zhou: avoid compilation warning
 	(void) p;
 
 	EVUTIL_ASSERT((events & EV_SIGNAL) == 0);
@@ -263,6 +301,7 @@ select_add(struct event_base *base, int fd, short old, short events, void *p)
 	if (sop->event_fds < fd) {
 		int fdsz = sop->event_fdsz;
 
+        // zhou: at least, we should have one fd_mask whose size is 4 bytes
 		if (fdsz < (int)sizeof(fd_mask))
 			fdsz = (int)sizeof(fd_mask);
 
@@ -279,6 +318,7 @@ select_add(struct event_base *base, int fd, short old, short events, void *p)
 			}
 		}
 
+        // zhou: the max fd
 		sop->event_fds = fd;
 	}
 
@@ -304,11 +344,13 @@ select_del(struct event_base *base, int fd, short old, short events, void *p)
 	EVUTIL_ASSERT((events & EV_SIGNAL) == 0);
 	check_selectop(sop);
 
+    // zhou: impossible here
 	if (sop->event_fds < fd) {
 		check_selectop(sop);
 		return (0);
 	}
 
+    // zhou: we never shrink fds
 	if (events & EV_READ)
 		FD_CLR(fd, sop->event_readset_in);
 

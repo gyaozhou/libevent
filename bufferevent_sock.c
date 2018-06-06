@@ -128,6 +128,11 @@ bufferevent_socket_set_conn_address_(struct bufferevent *bev,
 	memcpy(&bev_p->conn_address, addr, addrlen);
 }
 
+
+// zhou: triggered by put data in output buffer, this underlying function
+//       begin to sending??? or set EV_WRITE event which will make backend op
+//       notify me to send.
+
 static void
 bufferevent_socket_outbuf_cb(struct evbuffer *buf,
     const struct evbuffer_cb_info *cbinfo,
@@ -141,6 +146,10 @@ bufferevent_socket_outbuf_cb(struct evbuffer *buf,
 	    (bufev->enabled & EV_WRITE) &&
 	    !event_pending(&bufev->ev_write, EV_WRITE, NULL) &&
 	    !bufev_p->write_suspended) {
+
+        // zhou: if EV_WRITE is pending, which means we are taking care of the
+        //       WRITE event already.
+
 		/* Somebody added data to the buffer, and we would like to
 		 * write, and we were not writing.  So, start writing. */
 		if (bufferevent_add_event_(&bufev->ev_write, &bufev->timeout_write) == -1) {
@@ -149,6 +158,7 @@ bufferevent_socket_outbuf_cb(struct evbuffer *buf,
 	}
 }
 
+// zhou: Callback function for underlying readable event
 static void
 bufferevent_readcb(evutil_socket_t fd, short event, void *arg)
 {
@@ -213,6 +223,7 @@ bufferevent_readcb(evutil_socket_t fd, short event, void *arg)
 	if (res <= 0)
 		goto error;
 
+    // zhou: decrease token if rate limitation enabled
 	bufferevent_decrement_read_buckets_(bufev_p, res);
 
 	/* Invoke the user callback - must always be called last */
@@ -231,6 +242,7 @@ bufferevent_readcb(evutil_socket_t fd, short event, void *arg)
 	bufferevent_decref_and_unlock_(bufev);
 }
 
+// zhou: Callback function for underlying writable event
 static void
 bufferevent_writecb(evutil_socket_t fd, short event, void *arg)
 {
@@ -296,6 +308,7 @@ bufferevent_writecb(evutil_socket_t fd, short event, void *arg)
 	if (bufev_p->write_suspended)
 		goto done;
 
+    // zhou: check anything in output evbuffer, could be sent.
 	if (evbuffer_get_length(bufev->output)) {
 		evbuffer_unfreeze(bufev->output, 1);
 		res = evbuffer_write_atmost(bufev->output, fd, atmost);
@@ -322,6 +335,8 @@ bufferevent_writecb(evutil_socket_t fd, short event, void *arg)
 		event_del(&bufev->ev_write);
 	}
 
+
+    // zhou: checking output evbuffer again, then call user's write function if need.
 	/*
 	 * Invoke the user callback if our buffer is drained or below the
 	 * low watermark.
@@ -346,6 +361,7 @@ bufferevent_writecb(evutil_socket_t fd, short event, void *arg)
 	bufferevent_decref_and_unlock_(bufev);
 }
 
+//zhou: a kind of bufferevent
 struct bufferevent *
 bufferevent_socket_new(struct event_base *base, evutil_socket_t fd,
     int options)
@@ -361,21 +377,27 @@ bufferevent_socket_new(struct event_base *base, evutil_socket_t fd,
 	if ((bufev_p = mm_calloc(1, sizeof(struct bufferevent_private)))== NULL)
 		return NULL;
 
+    // zhou: bufferevent generic init finction.
 	if (bufferevent_init_common_(bufev_p, base, &bufferevent_ops_socket,
 				    options) < 0) {
 		mm_free(bufev_p);
 		return NULL;
 	}
 	bufev = &bufev_p->bev;
+
+    // zhou: the evbuffer's content will be drained by sending on FD.
 	evbuffer_set_flags(bufev->output, EVBUFFER_FLAG_DRAINS_TO_FD);
 
+    // zhou: the events state are "init", NOT "Pending".
 	event_assign(&bufev->ev_read, bufev->ev_base, fd,
 	    EV_READ|EV_PERSIST|EV_FINALIZE, bufferevent_readcb, bufev);
 	event_assign(&bufev->ev_write, bufev->ev_base, fd,
 	    EV_WRITE|EV_PERSIST|EV_FINALIZE, bufferevent_writecb, bufev);
 
+    // zhou: what dose we do when user write "output"
 	evbuffer_add_cb(bufev->output, bufferevent_socket_outbuf_cb, bufev);
 
+    // zhou: set who can write begin, and who can write end
 	evbuffer_freeze(bufev->input, 0);
 	evbuffer_freeze(bufev->output, 1);
 
@@ -586,11 +608,14 @@ be_socket_enable(struct bufferevent *bufev, short event)
 	return 0;
 }
 
+
 static int
 be_socket_disable(struct bufferevent *bufev, short event)
 {
 	struct bufferevent_private *bufev_p =
 	    EVUTIL_UPCAST(bufev, struct bufferevent_private, bev);
+
+    // zhou: remove that "there is something in EVLIST_XXX"??
 	if (event & EV_READ) {
 		if (event_del(&bufev->ev_read) == -1)
 			return -1;
@@ -655,6 +680,7 @@ be_socket_setfd(struct bufferevent *bufev, evutil_socket_t fd)
 	BEV_UNLOCK(bufev);
 }
 
+// zhou: not quite understand ????
 /* XXXX Should non-socket bufferevents support this? */
 int
 bufferevent_priority_set(struct bufferevent *bufev, int priority)
@@ -713,6 +739,8 @@ be_socket_ctrl(struct bufferevent *bev, enum bufferevent_ctrl_op op,
 	case BEV_CTRL_GET_FD:
 		data->fd = event_get_fd(&bev->ev_read);
 		return 0;
+
+        // zhou: bufferevent_sock doesn't provide specific method for locking
 	case BEV_CTRL_GET_UNDERLYING:
 	case BEV_CTRL_CANCEL_ALL:
 	default:

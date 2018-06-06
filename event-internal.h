@@ -65,12 +65,18 @@ extern "C" {
 
     @{
  */
+
+// zhou: defined in when event creatation, indicate how to handle it when happened
+
 /** A regular event. Uses the evcb_callback callback */
 #define EV_CLOSURE_EVENT 0
 /** A signal event. Uses the evcb_callback callback */
 #define EV_CLOSURE_EVENT_SIGNAL 1
 /** A persistent non-signal event. Uses the evcb_callback callback */
 #define EV_CLOSURE_EVENT_PERSIST 2
+
+// zhou: only used in deferred_cb
+
 /** A simple callback. Uses the evcb_selfcb callback. */
 #define EV_CLOSURE_CB_SELF 3
 /** A finalizing callback. Uses the evcb_cbfinalize callback. */
@@ -117,6 +123,8 @@ struct eventop {
 	/** Bit-array of supported event_method_features that this backend can
 	 * provide. */
 	enum event_method_feature features;
+
+    // zhou: poll need extra space for each fd, select/epoll don't.
 	/** Length of the extra information we should record for each fd that
 	    has one or more active events.  This information is recorded
 	    as part of the evmap entry for each fd, and passed as an argument
@@ -143,6 +151,8 @@ HT_HEAD(event_io_map, event_map_entry);
 #else
 #define event_io_map event_signal_map
 #endif
+
+// zhou: each fd or signal, correspond to one struct evmap_io/evmap_signal
 
 /* Used to map signal numbers to a list of events.  If EVMAP_USE_HT is not
    defined, this structure is also used as event_io_map, which maps fds to a
@@ -181,8 +191,11 @@ struct event_change;
 /* List of 'changes' since the last call to eventop.dispatch.  Only maintained
  * if the backend is using changesets. */
 struct event_changelist {
+    // zhou: pre-malloc event list
 	struct event_change *changes;
+    // zhou: number of used
 	int n_changes;
+    // zhou: size of pre-malloced, if not enough, realloc() it.
 	int changes_size;
 };
 
@@ -194,6 +207,7 @@ extern int event_debug_mode_on_;
 #define EVENT_DEBUG_MODE_IS_ON() (0)
 #endif
 
+// zhou: we define "struct evcallback_list" here.
 TAILQ_HEAD(evcallback_list, event_callback);
 
 /* Sets up an event for processing once */
@@ -205,6 +219,7 @@ struct event_once {
 	void *arg;
 };
 
+// zhou: core data struct for each events loop
 struct event_base {
 	/** Function pointers and other data to describe this event_base's
 	 * backend. */
@@ -212,6 +227,7 @@ struct event_base {
 	/** Pointer to backend-specific data. */
 	void *evbase;
 
+    // zhou: epoll() and kqueue() can work with changelist.
 	/** List of changes to tell backend about at next dispatch.  Only used
 	 * by the O(1) backends. */
 	struct event_changelist changelist;
@@ -221,6 +237,8 @@ struct event_base {
 	const struct eventop *evsigsel;
 	/** Data to implement the common signal handler code. */
 	struct evsig_info sig;
+
+////////////////////////////////////////////////////////////////////////////////
 
 	/** Number of virtual events */
 	int virtual_event_count;
@@ -235,6 +253,9 @@ struct event_base {
 	/** Maximum number of total events active in this event_base */
 	int event_count_active_max;
 
+////////////////////////////////////////////////////////////////////////////////
+
+    //zhou: flags to control processing flow
 	/** Set if we should terminate the loop once we're done processing
 	 * events. */
 	int event_gotterm;
@@ -249,6 +270,11 @@ struct event_base {
 	/** Set if we're running the event_base_loop function, to prevent
 	 * reentrant invocation. */
 	int running_loop;
+
+////////////////////////////////////////////////////////////////////////////////
+// zhou: there are only TWO queues, activequeues and active_later_queue, so
+//       there is no other visible queues for "EVLIST_XXX". We use ev_map
+//       manage "EVLIST_INSERTED"
 
 	/** Set to the number of deferred_cbs we've made 'active' in the
 	 * loop.  This is a hack to prevent starvation; it would be smarter
@@ -268,6 +294,8 @@ struct event_base {
 	 * we process events, but not this time. */
 	struct evcallback_list active_later_queue;
 
+
+////////////////////////////////////////////////////////////////////////////////
 	/* common timeout logic */
 
 	/** An array of common_timeout_list* for all of the common timeout
@@ -284,13 +312,19 @@ struct event_base {
 	/** Mapping from signal numbers to enabled (added) events. */
 	struct event_signal_map sigmap;
 
+    // zhou:min-heap, log(n) to find the smallest value. But NOT fully ordered.
+    //      min-heap used to implemented priority queue
+
 	/** Priority queue of events with timeouts. */
 	struct min_heap timeheap;
+
+////////////////////////////////////////////////////////////////////////////////
 
 	/** Stored timeval: used to avoid calling gettimeofday/clock_gettime
 	 * too often. */
 	struct timeval tv_cache;
 
+    // zhou: parameters related to precise time functions
 	struct evutil_monotonic_timer monotonic_timer;
 
 	/** Difference between internal time (maybe from clock_gettime) and
@@ -298,6 +332,8 @@ struct event_base {
 	struct timeval tv_clock_diff;
 	/** Second in which we last updated tv_clock_diff, in monotonic time. */
 	time_t last_updated_clock_diff;
+
+////////////////////////////////////////////////////////////////////////////////
 
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
 	/* threading support */
@@ -322,9 +358,18 @@ struct event_base {
 	/** Flags that this base was configured with */
 	enum event_base_config_flag flags;
 
+    //zhou: events whose priority after "limit_callbacks_after_prio",
+    //      will be handled at most of time "max_dispatch_time"
+
 	struct timeval max_dispatch_time;
+
+	//zhou: events whose priority after "limit_callbacks_after_prio",
+    //      will be handled at most of number "max_dispatch_callbacks"
+
 	int max_dispatch_callbacks;
 	int limit_callbacks_after_prio;
+
+////////////////////////////////////////////////////////////////////////////////
 
 	/* Notify main thread to wake up break, etc. */
 	/** True if the base already has a pending notify, and we don't need
@@ -339,6 +384,8 @@ struct event_base {
 	/** A function used to wake up the main thread from another thread. */
 	int (*th_notify_fn)(struct event_base *base);
 
+////////////////////////////////////////////////////////////////////////////////
+
 	/** Saved seed for weak random number generator. Some backends use
 	 * this to produce fairness among sockets. Protected by th_base_lock. */
 	struct evutil_weakrand_state weakrand_seed;
@@ -349,6 +396,7 @@ struct event_base {
 };
 
 struct event_config_entry {
+    // zhou: include two pointers to "next" and "previous next"
 	TAILQ_ENTRY(event_config_entry) next;
 
 	const char *avoid_method;
@@ -357,13 +405,26 @@ struct event_config_entry {
 /** Internal structure: describes the configuration we want for an event_base
  * that we're about to allocate. */
 struct event_config {
+    // zhou: define header of tailed_queue, including two pointers(tqh_first and tqh_last).
+    //       This queue is used to save all the "avoid method"
+    //       NOT a pointer
 	TAILQ_HEAD(event_configq, event_config_entry) entries;
 
+    //zhou: used by Windows only, hint to use such number of cores, NOT promise
 	int n_cpus_hint;
+
+    // zhou: all of the three are used to set rules to schedule/dispatch events handling
+
+    // zhou: event_base.max_dispatch_interval
 	struct timeval max_dispatch_interval;
+    // zhou: event_base.max_dispatch_callbacks
 	int max_dispatch_callbacks;
+    //zhou: event_base.limit_callbacks_after_prio
 	int limit_callbacks_after_prio;
+
+    //zhou: includes EV_FEATURE_ET/xx_O1/xx_FDS, which kind optimization we want.
 	enum event_method_feature require_features;
+    //zhou: some none OS depended options, such as do we need lock to pretect event_base ...
 	enum event_base_config_flag flags;
 };
 
@@ -403,9 +464,18 @@ int evsig_restore_handler_(struct event_base *base, int evsignal);
 
 int event_add_nolock_(struct event *ev,
     const struct timeval *tv, int tv_is_absolute);
+
+////////////////////////////////////////////////////////////////////////////////
+// zhou: How to handle if event is running on another thread? The event callback
+//       should always invocked in event_loop thread. But the event delete could
+//       be happened in different thread.
+
+
 /** Argument for event_del_nolock_. Tells event_del not to block on the event
  * if it's running in another thread. */
 #define EVENT_DEL_NOBLOCK 0
+
+// zhou: we will wait, if the event's callback function is running
 /** Argument for event_del_nolock_. Tells event_del to block on the event
  * if it's running in another thread, regardless of its value for EV_FINALIZE
  */
@@ -417,6 +487,9 @@ int event_add_nolock_(struct event *ev,
 /** Argument for event_del_nolock_. Tells event_del to procede even if the
  * event is set up for finalization rather for regular use.*/
 #define EVENT_DEL_EVEN_IF_FINALIZING 3
+
+////////////////////////////////////////////////////////////////////////////////
+
 int event_del_nolock_(struct event *ev, int blocking);
 int event_remove_timer_nolock_(struct event *ev);
 

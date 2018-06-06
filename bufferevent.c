@@ -112,6 +112,8 @@ bufferevent_unsuspend_write_(struct bufferevent *bufev, bufferevent_suspend_flag
 }
 
 
+// zhou: used to suspend/unsuspend read by high watermark.
+
 /* Callback to implement watermarks on the input buffer.  Only enabled
  * if the watermark is set. */
 static void
@@ -314,6 +316,7 @@ bufferevent_init_common_(struct bufferevent_private *bufev_private,
 	evutil_timerclear(&bufev->timeout_read);
 	evutil_timerclear(&bufev->timeout_write);
 
+    // zhou: setup specific type of bufferevent.
 	bufev->be_ops = ops;
 
 	bufferevent_ratelim_init_(bufev_private);
@@ -426,6 +429,8 @@ bufferevent_get_priority(const struct bufferevent *bufev)
 	}
 }
 
+//zhou: simply append data to evbuffer, we have "evbuffer" callback to check
+//      whether need to send data to underlying
 int
 bufferevent_write(struct bufferevent *bufev, const void *data, size_t size)
 {
@@ -465,6 +470,8 @@ bufferevent_enable(struct bufferevent *bufev, short event)
 	int r = 0;
 
 	bufferevent_incref_and_lock_(bufev);
+
+    // zhou: if the read action was suspended due to rate control
 	if (bufev_private->read_suspended)
 		impl_events &= ~EV_READ;
 	if (bufev_private->write_suspended)
@@ -472,6 +479,7 @@ bufferevent_enable(struct bufferevent *bufev, short event)
 
 	bufev->enabled |= event;
 
+    // zhou: After consider the rate limitation, we make the event pending
 	if (impl_events && bufev->be_ops->enable(bufev, impl_events) < 0)
 		r = -1;
 
@@ -574,10 +582,14 @@ bufferevent_setwatermark(struct bufferevent *bufev, short events,
 	    EVUTIL_UPCAST(bufev, struct bufferevent_private, bev);
 
 	BEV_LOCK(bufev);
+
+    // zhou: there is very less things need do with write watermarks.
 	if (events & EV_WRITE) {
 		bufev->wm_write.low = lowmark;
 		bufev->wm_write.high = highmark;
 	}
+
+////////////////////////////////////////////////////////////////////////////////
 
 	if (events & EV_READ) {
 		bufev->wm_read.low = lowmark;
@@ -603,6 +615,8 @@ bufferevent_setwatermark(struct bufferevent *bufev, short events,
 			else if (evbuffer_get_length(bufev->input) < highmark)
 				bufferevent_wm_unsuspend_read(bufev);
 		} else {
+            // zhou:
+
 			/* There is now no high-water mark for read. */
 			if (bufev_private->read_watermarks_cb)
 				evbuffer_cb_clear_flags(bufev->input,
@@ -691,11 +705,13 @@ bufferevent_decref_and_unlock_(struct bufferevent *bufev)
 
 	EVUTIL_ASSERT(bufev_private->refcnt > 0);
 
+    // zhou: There still someone using this "bufferevent"
 	if (--bufev_private->refcnt) {
 		BEV_UNLOCK(bufev);
 		return 0;
 	}
 
+    // zhou: safely tear down all the events???
 	if (bufev->be_ops->unlink)
 		bufev->be_ops->unlink(bufev);
 
@@ -823,6 +839,8 @@ bufferevent_enable_locking_(struct bufferevent *bufev, void *lock)
 		BEV_UPCAST(bufev)->lock = lock;
 		BEV_UPCAST(bufev)->own_lock = 0;
 	} else if (!lock) {
+
+        // zhou: we use event_base locking function.
 		EVTHREAD_ALLOC_LOCK(lock, EVTHREAD_LOCKTYPE_RECURSIVE);
 		if (!lock)
 			return -1;
@@ -832,6 +850,8 @@ bufferevent_enable_locking_(struct bufferevent *bufev, void *lock)
 		BEV_UPCAST(bufev)->lock = lock;
 		BEV_UPCAST(bufev)->own_lock = 0;
 	}
+
+    // zhou: init the lock to "ev_buffer"
 	evbuffer_enable_locking(bufev->input, lock);
 	evbuffer_enable_locking(bufev->output, lock);
 
@@ -842,6 +862,7 @@ bufferevent_enable_locking_(struct bufferevent *bufev, void *lock)
 #endif
 }
 
+// zhou: API
 int
 bufferevent_setfd(struct bufferevent *bev, evutil_socket_t fd)
 {
@@ -855,6 +876,7 @@ bufferevent_setfd(struct bufferevent *bev, evutil_socket_t fd)
 	return res;
 }
 
+// zhou: API
 evutil_socket_t
 bufferevent_getfd(struct bufferevent *bev)
 {
