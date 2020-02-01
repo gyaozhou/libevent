@@ -43,7 +43,7 @@
 #ifndef EVENT__HAVE_GETTIMEOFDAY
 #include <sys/timeb.h>
 #endif
-#if !defined(EVENT__HAVE_NANOSLEEP) && !defined(EVENT_HAVE_USLEEP) && \
+#if !defined(EVENT__HAVE_NANOSLEEP) && !defined(EVENT__HAVE_USLEEP) && \
 	!defined(_WIN32)
 #include <sys/select.h>
 #endif
@@ -126,8 +126,22 @@ evutil_usleep_(const struct timeval *tv)
 		return;
 #if defined(_WIN32)
 	{
-		long msec = evutil_tv_to_msec_(tv);
-		Sleep((DWORD)msec);
+		__int64 usec;
+		LARGE_INTEGER li;
+		HANDLE timer;
+
+		usec = tv->tv_sec * 1000000LL + tv->tv_usec;
+		if (!usec)
+			return;
+
+		li.QuadPart = -10LL * usec;
+		timer = CreateWaitableTimer(NULL, TRUE, NULL);
+		if (!timer)
+			return;
+
+		SetWaitableTimer(timer, &li, 0, NULL, NULL, 0);
+		WaitForSingleObject(timer, INFINITE);
+		CloseHandle(timer);
 	}
 #elif defined(EVENT__HAVE_NANOSLEEP)
 	{
@@ -158,18 +172,28 @@ evutil_date_rfc1123(char *date, const size_t datelen, const struct tm *tm)
 
 	time_t t = time(NULL);
 
-#ifndef _WIN32
+#if defined(EVENT__HAVE__GMTIME64_S) || !defined(_WIN32)
 	struct tm sys;
 #endif
 
 	/* If `tm` is null, set system's current time. */
 	if (tm == NULL) {
-#ifdef _WIN32
-		/** TODO: detect _gmtime64()/_gmtime64_s() */
-		tm = gmtime(&t);
-#else
+#if !defined(_WIN32)
 		gmtime_r(&t, &sys);
 		tm = &sys;
+		/** detect _gmtime64()/_gmtime64_s() */
+#elif defined(EVENT__HAVE__GMTIME64_S)
+		errno_t err;
+		err = _gmtime64_s(&sys, &t);
+		if (err) {
+			event_errx(1, "Invalid argument to _gmtime64_s");
+		} else {
+			tm = &sys;
+		}
+#elif defined(EVENT__HAVE__GMTIME64)
+		tm = _gmtime64(&t);
+#else
+		tm = gmtime(&t);
 #endif
 	}
 

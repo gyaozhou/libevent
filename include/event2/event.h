@@ -175,11 +175,13 @@
   event2/rpc.h
   A framework for creating RPC servers and clients
 
+  event2/watch.h
+  "Prepare" and "check" watchers.
  */
 
 /** @file event2/event.h
 
-  Core functions for waiting for and receiving events, and using event bases.
+  @brief Core functions for waiting for and receiving events, and using event bases.
 */
 
 #include <event2/visibility.h>
@@ -221,8 +223,6 @@ struct event_base
 ;
 
 /**
- * @struct event
- *
  * Structure to represent a single event.
  *
  * An event can have some underlying condition it represents: a socket
@@ -285,7 +285,7 @@ struct event
  * There are many options that can be used to alter the behavior and
  * implementation of an event_base.  To avoid having to pass them all in a
  * complex many-argument constructor, we provide an abstract data type
- * wrhere you set up configation information before passing it to
+ * where you set up configuration information before passing it to
  * event_base_new_with_config().
  *
  * @see event_config_new(), event_config_free(), event_base_new_with_config(),
@@ -370,7 +370,7 @@ int event_reinit(struct event_base *base);
   @see event_base_loop()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_dispatch(struct event_base *);
+int event_base_dispatch(struct event_base *base);
 
 /**
  Get the kernel event notification mechanism used by Libevent.
@@ -379,7 +379,7 @@ int event_base_dispatch(struct event_base *);
  @return a string identifying the kernel event mechanism (kqueue, epoll, etc.)
  */
 EVENT2_EXPORT_SYMBOL
-const char *event_base_get_method(const struct event_base *);
+const char *event_base_get_method(const struct event_base *eb);
 
 /**
    Gets all event notification mechanisms supported by Libevent.
@@ -438,7 +438,7 @@ int event_gettime_monotonic(struct event_base *base, struct timeval *tp);
    @return the number of events specified in the flags
 */
 EVENT2_EXPORT_SYMBOL
-int event_base_get_num_events(struct event_base *, unsigned int);
+int event_base_get_num_events(struct event_base *eb, unsigned int flags);
 
 /**
   Get the maximum number of events in a given event_base as specified in the
@@ -451,7 +451,7 @@ int event_base_get_num_events(struct event_base *, unsigned int);
   @return the number of events specified in the flags
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_get_max_events(struct event_base *, unsigned int, int);
+int event_base_get_max_events(struct event_base *eb, unsigned int flags, int clear);
 
 /**
    Allocates a new event configuration object.
@@ -632,7 +632,7 @@ int event_config_set_num_cpus_hint(struct event_config *cfg, int cpus);
 /**
  * Record an interval and/or a number of callbacks after which the event base
  * should check for new events.  By default, the event base will run as many
- * events are as activated at the higest activated priority before checking
+ * events are as activated at the highest activated priority before checking
  * for new events.  If you configure it by setting max_interval, it will check
  * the time after each callback, and not allow more than max_interval to
  * elapse before checking for new events.  If you configure it by setting
@@ -675,7 +675,7 @@ int event_config_set_max_dispatch_interval(struct event_config *cfg,
   @see event_base_new(), event_base_free(), event_init(), event_assign()
 */
 EVENT2_EXPORT_SYMBOL
-struct event_base *event_base_new_with_config(const struct event_config *);
+struct event_base *event_base_new_with_config(const struct event_config *cfg);
 
 /**
   Deallocate all memory associated with an event_base, and free the base.
@@ -689,13 +689,10 @@ struct event_base *event_base_new_with_config(const struct event_config *);
   @param eb an event_base to be freed
  */
 EVENT2_EXPORT_SYMBOL
-void event_base_free(struct event_base *);
+void event_base_free(struct event_base *eb);
 
 /**
    As event_base_free, but do not run finalizers.
-
-   THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
-   BECOMES STABLE.
  */
 EVENT2_EXPORT_SYMBOL
 void event_base_free_nofinalize(struct event_base *);
@@ -787,7 +784,7 @@ void event_enable_debug_logging(ev_uint32_t which);
   @return 0 on success, -1 on failure.
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_set(struct event_base *, struct event *);
+int event_base_set(struct event_base *eb, struct event *ev);
 
 /** @name Loop flags
 
@@ -826,7 +823,7 @@ int event_base_set(struct event_base *, struct event *);
      EVLOOP_NONBLOCK
   */
 EVENT2_EXPORT_SYMBOL
-int event_base_loop(struct event_base *, int);
+int event_base_loop(struct event_base *eb, int flags);
 
 /**
   Exit the event loop after the specified time
@@ -844,7 +841,7 @@ int event_base_loop(struct event_base *, int);
   @see event_base_loopbreak()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_loopexit(struct event_base *, const struct timeval *);
+int event_base_loopexit(struct event_base *eb, const struct timeval *tv);
 
 /**
   Abort the active event_base_loop() immediately.
@@ -860,7 +857,7 @@ int event_base_loopexit(struct event_base *, const struct timeval *);
   @see event_base_loopexit()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_loopbreak(struct event_base *);
+int event_base_loopbreak(struct event_base *eb);
 
 /**
   Tell the active event_base_loop() to scan for new events immediately.
@@ -880,7 +877,7 @@ int event_base_loopbreak(struct event_base *);
   @see event_base_loopbreak()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_loopcontinue(struct event_base *);
+int event_base_loopcontinue(struct event_base *eb);
 
 /**
   Checks if the event loop was told to exit by event_base_loopexit().
@@ -895,7 +892,7 @@ int event_base_loopcontinue(struct event_base *);
   @see event_base_got_break()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_got_exit(struct event_base *);
+int event_base_got_exit(struct event_base *eb);
 
 /**
   Checks if the event loop was told to abort immediately by event_base_loopbreak().
@@ -910,7 +907,7 @@ int event_base_got_exit(struct event_base *);
   @see event_base_got_exit()
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_got_break(struct event_base *);
+int event_base_got_break(struct event_base *eb);
 
 /**
  * @name event flags
@@ -944,9 +941,6 @@ int event_base_got_break(struct event_base *);
  * To use this option safely, you may need to use event_finalize() or
  * event_free_finalize() in order to safely tear down an event in a
  * multithreaded application.  See those functions for more information.
- *
- * THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
- * BECOMES STABLE.
  **/
 #define EV_FINALIZE     0x40
 /**
@@ -963,11 +957,13 @@ int event_base_got_break(struct event_base *);
 /**
    @name evtimer_* macros
 
-    Aliases for working with one-shot timer events */
+   Aliases for working with one-shot timer events
+   If you need EV_PERSIST timer use event_*() functions.
+ */
 /**@{*/
 #define evtimer_assign(ev, b, cb, arg) \
 	event_assign((ev), (b), -1, 0, (cb), (arg))
-#define evtimer_new(b, cb, arg)	       event_new((b), -1, 0, (cb), (arg))
+#define evtimer_new(b, cb, arg)		event_new((b), -1, 0, (cb), (arg))
 #define evtimer_add(ev, tv)		event_add((ev), (tv))
 #define evtimer_del(ev)			event_del(ev)
 #define evtimer_pending(ev, tv)		event_pending((ev), EV_TIMEOUT, (tv))
@@ -988,6 +984,20 @@ int event_base_got_break(struct event_base *);
 #define evsignal_del(ev)		event_del(ev)
 #define evsignal_pending(ev, tv)	event_pending((ev), EV_SIGNAL, (tv))
 #define evsignal_initialized(ev)	event_initialized(ev)
+/**@}*/
+
+/**
+   @name evuser_* macros
+
+   Aliases for working with user-triggered events
+   If you need EV_PERSIST event use event_*() functions.
+ */
+/**@{*/
+#define evuser_new(b, cb, arg)		event_new((b), -1, 0, (cb), (arg))
+#define evuser_del(ev)			event_del(ev)
+#define evuser_pending(ev, tv)		event_pending((ev), 0, (tv))
+#define evuser_initialized(ev)		event_initialized(ev)
+#define evuser_trigger(ev)		event_active((ev), 0, 0)
 /**@}*/
 
 /**
@@ -1077,7 +1087,7 @@ void *event_self_cbarg(void);
   @see event_free(), event_add(), event_del(), event_assign()
  */
 EVENT2_EXPORT_SYMBOL
-struct event *event_new(struct event_base *, evutil_socket_t, short, event_callback_fn, void *);
+struct event *event_new(struct event_base *base, evutil_socket_t fd, short events, event_callback_fn callback, void *callback_arg);
 
 
 /**
@@ -1119,7 +1129,7 @@ struct event *event_new(struct event_base *, evutil_socket_t, short, event_callb
     event_get_struct_event_size()
   */
 EVENT2_EXPORT_SYMBOL
-int event_assign(struct event *, struct event_base *, evutil_socket_t, short, event_callback_fn, void *);
+int event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, short events, event_callback_fn callback, void *callback_arg);
 
 /**
    Deallocate a struct event * returned by event_new().
@@ -1132,10 +1142,6 @@ void event_free(struct event *);
 
 /**
  * Callback type for event_finalize and event_free_finalize().
- *
- * THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
- * BECOMES STABLE.
- *
  **/
 typedef void (*event_finalize_callback_fn)(struct event *, void *);
 /**
@@ -1165,9 +1171,6 @@ typedef void (*event_finalize_callback_fn)(struct event *, void *);
    A finalizer callback must not make events pending or active.  It must not
    add events, activate events, or attempt to "resuscitate" the event being
    finalized in any way.
-
-   THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
-   BECOMES STABLE.
 
    @return 0 on success, -1 on failure.
  */
@@ -1203,7 +1206,7 @@ int event_free_finalize(unsigned, struct event *, event_finalize_callback_fn);
   @return 0 if successful, or -1 if an error occurred
  */
 EVENT2_EXPORT_SYMBOL
-int event_base_once(struct event_base *, evutil_socket_t, short, event_callback_fn, void *, const struct timeval *);
+int event_base_once(struct event_base *base, evutil_socket_t fd, short events, event_callback_fn callback, void *arg, const struct timeval *timeout);
 
 /**
   Add an event to the set of pending events.
@@ -1253,15 +1256,12 @@ int event_remove_timer(struct event *ev);
   @see event_add()
  */
 EVENT2_EXPORT_SYMBOL
-int event_del(struct event *);
+int event_del(struct event *ev);
 
 /**
    As event_del(), but never blocks while the event's callback is running
    in another thread, even if the event was constructed without the
    EV_FINALIZE flag.
-
-   THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
-   BECOMES STABLE.
  */
 EVENT2_EXPORT_SYMBOL
 int event_del_noblock(struct event *ev);
@@ -1269,9 +1269,6 @@ int event_del_noblock(struct event *ev);
    As event_del(), but always blocks while the event's callback is running
    in another thread, even if the event was constructed with the
    EV_FINALIZE flag.
-
-   THIS IS AN EXPERIMENTAL API. IT MIGHT CHANGE BEFORE THE LIBEVENT 2.1 SERIES
-   BECOMES STABLE.
  */
 EVENT2_EXPORT_SYMBOL
 int event_del_block(struct event *ev);
@@ -1324,7 +1321,7 @@ struct event *event_base_get_running_event(struct event_base *base);
   The event_initialized() function can be used to check if an event has been
   initialized.
 
-  Warning: This function is only useful for distinguishing a a zeroed-out
+  Warning: This function is only useful for distinguishing a zeroed-out
     piece of memory from an initialized event, it can easily be confused by
     uninitialized memory.  Thus, it should ONLY be used to distinguish an
     initialized event from zero.
@@ -1469,7 +1466,7 @@ ev_uint32_t event_get_version_number(void);
   @see event_priority_set()
  */
 EVENT2_EXPORT_SYMBOL
-int	event_base_priority_init(struct event_base *, int);
+int	event_base_priority_init(struct event_base *eb, int npriorities);
 
 /**
   Get the number of different event priorities.
@@ -1490,7 +1487,7 @@ int	event_base_get_npriorities(struct event_base *eb);
   @see event_priority_init(), event_get_priority()
   */
 EVENT2_EXPORT_SYMBOL
-int	event_priority_set(struct event *, int);
+int	event_priority_set(struct event *ev, int priority);
 
 /**
    Prepare an event_base to use a large number of timeouts with the same
@@ -1559,7 +1556,7 @@ void event_set_mem_functions(
    @param output A stdio file to write on.
  */
 EVENT2_EXPORT_SYMBOL
-void event_base_dump_events(struct event_base *, FILE *);
+void event_base_dump_events(struct event_base *base, FILE *output);
 
 
 /**
@@ -1570,7 +1567,7 @@ void event_base_dump_events(struct event_base *, FILE *);
 
    @param base the event_base on which to activate the events.
    @param fd An fd to active events on.
-   @param events One or more of EV_{READ,WRITE}.
+   @param events One or more of EV_{READ,WRITE,TIMEOUT}.
  */
 EVENT2_EXPORT_SYMBOL
 void event_base_active_by_fd(struct event_base *base, evutil_socket_t fd, short events);
@@ -1582,7 +1579,7 @@ void event_base_active_by_fd(struct event_base *base, evutil_socket_t fd, short 
    added will not become active.
 
    @param base the event_base on which to activate the events.
-   @param fd The signal to active events on.
+   @param sig The signal to active events on.
  */
 EVENT2_EXPORT_SYMBOL
 void event_base_active_by_signal(struct event_base *base, int sig);

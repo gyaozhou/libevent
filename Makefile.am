@@ -5,8 +5,8 @@
 # See LICENSE for copying information.
 
 # 'foreign' means that we're not enforcing GNU package rules strictly.
-# '1.9' means that we need automake 1.9 or later (and we do).
-AUTOMAKE_OPTIONS = foreign 1.9 subdir-objects
+# '1.13' means that we need automake 1.13 or later (and we do).
+AUTOMAKE_OPTIONS = foreign 1.13 subdir-objects
 
 ACLOCAL_AMFLAGS = -I m4
 
@@ -107,18 +107,49 @@ PLATFORM_DEPENDENT_SRC = \
 	arc4random.c \
 	epoll_sub.c
 
+CMAKE_FILES = \
+	cmake/AddCompilerFlags.cmake \
+	cmake/AddEventLibrary.cmake \
+	cmake/CheckConstExists.cmake \
+	cmake/CheckFileOffsetBits.c \
+	cmake/CheckFileOffsetBits.cmake \
+	cmake/CheckFunctionExistsEx.c \
+	cmake/CheckFunctionExistsEx.cmake \
+	cmake/CheckFunctionKeywords.cmake \
+	cmake/CheckPrototypeDefinition.c.in \
+	cmake/CheckPrototypeDefinition.cmake \
+	cmake/CheckWorkingKqueue.cmake \
+	cmake/CodeCoverage.cmake \
+	cmake/COPYING-CMAKE-SCRIPTS \
+	cmake/Copyright.txt \
+	cmake/FindGit.cmake \
+	cmake/LibeventConfigBuildTree.cmake.in \
+	cmake/LibeventConfig.cmake.in \
+	cmake/LibeventConfigVersion.cmake.in \
+	cmake/VersionViaGit.cmake \
+	cmake/Uninstall.cmake.in \
+	cmake/UseDoxygen.cmake \
+	event-config.h.cmake \
+	evconfig-private.h.cmake \
+	CMakeLists.txt
+
+DOCUMENTATION_FILES = \
+	Documentation/Building.md
+
 EXTRA_DIST = \
 	ChangeLog-1.4 \
 	ChangeLog-2.0 \
 	Doxyfile \
 	LICENSE \
-	Makefile.nmake test/Makefile.nmake \
 	autogen.sh \
 	event_rpcgen.py \
 	libevent.pc.in \
 	make-event-config.sed \
 	whatsnew-2.0.txt \
 	whatsnew-2.1.txt \
+	README.md \
+	$(CMAKE_FILES) \
+	$(DOCUMENTATION_FILES) \
 	$(PLATFORM_DEPENDENT_SRC)
 
 LIBEVENT_LIBS_LA = libevent.la libevent_core.la libevent_extra.la
@@ -151,10 +182,11 @@ include test/include.am
 
 if BUILD_WIN32
 
+SYS_CORE_LIBS = -liphlpapi
 SYS_LIBS = -lws2_32 -lshell32 -ladvapi32
 SYS_SRC = win32select.c buffer_iocp.c event_iocp.c \
 	bufferevent_async.c
-SYS_INCLUDES = -IWIN32-Code -IWIN32-Code/nmake
+SYS_INCLUDES = -IWIN32-Code
 
 if THREADS
 SYS_SRC += evthread_win32.c
@@ -162,6 +194,7 @@ endif
 
 else
 
+SYS_CORE_LIBS =
 SYS_LIBS =
 SYS_SRC =
 SYS_INCLUDES =
@@ -213,6 +246,7 @@ CORE_SRC =					\
 	evutil.c				\
 	evutil_rand.c				\
 	evutil_time.c				\
+	watch.c					\
 	listener.c				\
 	log.c					\
 	$(SYS_SRC)
@@ -238,11 +272,11 @@ AM_LDFLAGS = $(LIBEVENT_LDFLAGS)
 GENERIC_LDFLAGS = -version-info $(VERSION_INFO) $(RELEASE) $(NO_UNDEFINED) $(AM_LDFLAGS)
 
 libevent_la_SOURCES = $(CORE_SRC) $(EXTRAS_SRC)
-libevent_la_LIBADD = @LTLIBOBJS@ $(SYS_LIBS)
+libevent_la_LIBADD = @LTLIBOBJS@ $(SYS_LIBS) $(SYS_CORE_LIBS)
 libevent_la_LDFLAGS = $(GENERIC_LDFLAGS)
 
 libevent_core_la_SOURCES = $(CORE_SRC)
-libevent_core_la_LIBADD = @LTLIBOBJS@ $(SYS_LIBS)
+libevent_core_la_LIBADD = @LTLIBOBJS@ $(SYS_LIBS) $(SYS_CORE_LIBS)
 libevent_core_la_LDFLAGS = $(GENERIC_LDFLAGS)
 
 if PTHREADS
@@ -263,14 +297,15 @@ libevent_openssl_la_CPPFLAGS = $(AM_CPPFLAGS) $(OPENSSL_INCS)
 endif
 
 noinst_HEADERS +=				\
-	WIN32-Code/nmake/evconfig-private.h	\
-	WIN32-Code/nmake/event2/event-config.h	\
+	WIN32-Code/getopt.h			\
+	WIN32-Code/getopt.c			\
+	WIN32-Code/getopt_long.c	\
 	WIN32-Code/tree.h			\
-	bufferevent-internal.h			\
-	changelist-internal.h			\
+	bufferevent-internal.h		\
+	changelist-internal.h		\
 	compat/sys/queue.h			\
 	defer-internal.h			\
-	epolltable-internal.h			\
+	epolltable-internal.h		\
 	evbuffer-internal.h			\
 	event-internal.h			\
 	evmap-internal.h			\
@@ -307,9 +342,7 @@ endif
 
 verify: check
 
-doxygen: FORCE
-	doxygen $(srcdir)/Doxyfile
-FORCE:
+include doxygen.am
 
 DISTCLEANFILES += *~ libevent.pc libevent_core.pc libevent_extra.pc ./include/event2/event-config.h
 

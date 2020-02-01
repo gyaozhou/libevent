@@ -329,7 +329,8 @@ evrpc_request_cb(struct evhttp_request *req, void *arg)
 	return;
 
 error:
-	evrpc_reqstate_free_(rpc_state);
+	if (rpc_state)
+		evrpc_reqstate_free_(rpc_state);
 	evhttp_send_error(req, HTTP_SERVUNAVAIL, NULL);
 	return;
 }
@@ -592,7 +593,7 @@ evrpc_pool_add_connection(struct evrpc_pool *pool,
 	 * unless a timeout was specifically set for a connection,
 	 * the connection inherits the timeout from the pool.
 	 */
-	if (!evutil_timerisset(&connection->timeout))
+	if (!(connection->flags & EVHTTP_CON_TIMEOUT_ADJUSTED))
 		evhttp_connection_set_timeout(connection, pool->timeout);
 
 	/*
@@ -891,8 +892,7 @@ evrpc_reply_done(struct evhttp_request *req, void *arg)
 			 * layer is going to free it.  we need to
 			 * request ownership explicitly
 			 */
-			if (req != NULL)
-				evhttp_request_own(req);
+			evhttp_request_own(req);
 
 			evrpc_pause_request(pool, ctx,
 			    evrpc_reply_done_closure);

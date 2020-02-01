@@ -49,6 +49,9 @@
 
 /** @file event2/dns.h
  *
+ * @brief Provides a few APIs to use for resolving DNS names, and a facility
+ * for implementing simple DNS servers.
+ *
  * Welcome, gentle reader
  *
  * Async DNS lookups are really a whole lot harder than they should be,
@@ -62,12 +65,13 @@
  * them when they go down. Otherwise it will round robin between them.
  *
  * Quick start guide:
+ * @code
  *   #include "evdns.h"
  *   void callback(int result, char type, int count, int ttl,
  *		 void *addresses, void *arg);
  *   evdns_resolv_conf_parse(DNS_OPTIONS_ALL, "/etc/resolv.conf");
  *   evdns_resolve("www.hostname.com", 0, callback, NULL);
- *
+ *@endcode
  * When the lookup is complete the callback function is called. The
  * first argument will be one of the DNS_ERR_* defines in evdns.h.
  * Hopefully it will be DNS_ERR_NONE, in which case type will be
@@ -106,12 +110,14 @@
  *
  * For example, with ndots set to 1 (the default) and a search domain list of
  * ["myhome.net"]:
+ *
+ * <pre>
  *  Query: www
  *  Order: www.myhome.net, www.
  *
  *  Query: www.abc
  *  Order: www.abc., www.abc.myhome.net
- *
+ * </pre>
  * Internals:
  *
  * Requests are kept in two queues. The first is the inflight queue. In
@@ -179,11 +185,39 @@ extern "C" {
 
 #define DNS_QUERY_NO_SEARCH 1
 
+/* Allow searching */
 #define DNS_OPTION_SEARCH 1
+/* Parse "nameserver" and add default if no such section */
 #define DNS_OPTION_NAMESERVERS 2
+/* Parse additional options like:
+ * - timeout:
+ * - getaddrinfo-allow-skew:
+ * - max-timeouts:
+ * - max-inflight:
+ * - attempts:
+ * - randomize-case:
+ * - initial-probe-timeout:
+ */
 #define DNS_OPTION_MISC 4
+/* Load hosts file (i.e. "/etc/hosts") */
 #define DNS_OPTION_HOSTSFILE 8
-#define DNS_OPTIONS_ALL 15
+/**
+ * All above:
+ * - DNS_OPTION_SEARCH
+ * - DNS_OPTION_NAMESERVERS
+ * - DNS_OPTION_MISC
+ * - DNS_OPTION_HOSTSFILE
+ */
+#define DNS_OPTIONS_ALL (    \
+    DNS_OPTION_SEARCH      | \
+    DNS_OPTION_NAMESERVERS | \
+    DNS_OPTION_MISC        | \
+    DNS_OPTION_HOSTSFILE   | \
+    0                        \
+)
+/* Do not "default" nameserver (i.e. "127.0.0.1:53") if there is no nameservers
+ * in resolv.conf, (iff DNS_OPTION_NAMESERVERS is set) */
+#define DNS_OPTION_NAMESERVERS_NO_DEFAULT 16
 
 /* Obsolete name for DNS_QUERY_NO_SEARCH */
 #define DNS_NO_SEARCH DNS_QUERY_NO_SEARCH
@@ -208,6 +242,10 @@ struct event_base;
 /** Flag for evdns_base_new: Do not prevent the libevent event loop from
  * exiting when we have no active dns requests. */
 #define EVDNS_BASE_DISABLE_WHEN_INACTIVE 0x8000
+/** Flag for evdns_base_new: If EVDNS_BASE_INITIALIZE_NAMESERVERS isset, do not
+ * add default nameserver if there are no nameservers in resolv.conf
+ * @see DNS_OPTION_NAMESERVERS_NO_DEFAULT */
+#define EVDNS_BASE_NAMESERVERS_NO_DEFAULT 0x10000
 
 /**
   Initialize the asynchronous DNS library.
@@ -217,8 +255,8 @@ struct event_base;
   evdns_config_windows_nameservers() on Windows.
 
   @param event_base the event base to associate the dns client with
-  @param flags any of EVDNS_BASE_INITIALIZE_NAMESERVERS|
-    EVDNS_BASE_DISABLE_WHEN_INACTIVE
+  @param initialize_nameservers any of EVDNS_BASE_INITIALIZE_NAMESERVERS|
+    EVDNS_BASE_DISABLE_WHEN_INACTIVE|EVDNS_BASE_NAMESERVERS_NO_DEFAULT
   @return evdns_base object if successful, or NULL if an error occurred.
   @see evdns_base_free()
  */
@@ -233,7 +271,7 @@ struct evdns_base * evdns_base_new(struct event_base *event_base, int initialize
   an empty result with the error flag set to DNS_ERR_SHUTDOWN. Otherwise,
   the requests will be silently discarded.
 
-  @param evdns_base the evdns base to free
+  @param base the evdns base to free
   @param fail_requests if zero, active requests will be aborted; if non-zero,
 		active requests will return DNS_ERR_SHUTDOWN.
   @see evdns_base_new()
@@ -245,7 +283,7 @@ void evdns_base_free(struct evdns_base *base, int fail_requests);
    Remove all hosts entries that have been loaded into the event_base via
    evdns_base_load_hosts or via event_base_resolv_conf_parse.
 
-   @param evdns_base the evdns base to remove outdated host addresses from
+   @param base the evdns base to remove outdated host addresses from
  */
 EVENT2_EXPORT_SYMBOL
 void evdns_base_clear_host_addresses(struct evdns_base *base);
@@ -423,7 +461,8 @@ void evdns_cancel_request(struct evdns_base *base, struct evdns_request *req);
   The currently available configuration options are:
 
     ndots, timeout, max-timeouts, max-inflight, attempts, randomize-case,
-    bind-to, initial-probe-timeout, getaddrinfo-allow-skew.
+    bind-to, initial-probe-timeout, getaddrinfo-allow-skew,
+    so-rcvbuf, so-sndbuf.
 
   In versions before Libevent 2.0.3-alpha, the option name needed to end with
   a colon.
@@ -453,7 +492,7 @@ int evdns_base_set_option(struct evdns_base *base, const char *option, const cha
 
   @param base the evdns_base to which to apply this operation
   @param flags any of DNS_OPTION_NAMESERVERS|DNS_OPTION_SEARCH|DNS_OPTION_MISC|
-    DNS_OPTION_HOSTSFILE|DNS_OPTIONS_ALL
+    DNS_OPTION_HOSTSFILE|DNS_OPTIONS_ALL|DNS_OPTION_NAMESERVERS_NO_DEFAULT
   @param filename the path to the resolv.conf file
   @return 0 if successful, or various positive error codes if an error
     occurred (see above)

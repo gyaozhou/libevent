@@ -144,7 +144,7 @@ struct event {
 	union {
 		TAILQ_ENTRY(event) ev_next_with_common_timeout;
         // zhou: this timeout event's position in event_base. min_heap
-		int min_heap_idx;
+		size_t min_heap_idx;
 	} ev_timeout_pos;
 	evutil_socket_t ev_fd;
 

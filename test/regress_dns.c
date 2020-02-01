@@ -72,9 +72,12 @@
 #include "event2/util.h"
 #include "event2/listener.h"
 #include "event2/bufferevent.h"
+#include <event2/thread.h>
 #include "log-internal.h"
+#include "evthread-internal.h"
 #include "regress.h"
 #include "regress_testutils.h"
+#include "regress_thread.h"
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
@@ -201,7 +204,7 @@ dns_resolve_reverse(void *ptr)
 {
 	struct in_addr in;
 	struct event_base *base = event_base_new();
-	struct evdns_base *dns = evdns_base_new(base, 1/* init name servers */);
+	struct evdns_base *dns = evdns_base_new(base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
 	struct evdns_request *req = NULL;
 
 	tt_assert(base);
@@ -1001,6 +1004,59 @@ end:
 		event_base_free(inactive_base);
 }
 
+static void
+dns_initialize_nameservers_test(void *arg)
+{
+	struct basic_test_data *data = arg;
+	struct event_base *base = data->base;
+	struct evdns_base *dns = NULL;
+
+	dns = evdns_base_new(base, 0);
+	tt_assert(dns);
+	tt_int_op(evdns_base_get_nameserver_addr(dns, 0, NULL, 0), ==, -1);
+	evdns_base_free(dns, 0);
+
+	dns = evdns_base_new(base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
+	tt_assert(dns);
+	tt_int_op(evdns_base_get_nameserver_addr(dns, 0, NULL, 0), ==, sizeof(struct sockaddr));
+
+end:
+	if (dns)
+		evdns_base_free(dns, 0);
+}
+#ifndef _WIN32
+#define RESOLV_FILE "empty-resolv.conf"
+static void
+dns_nameservers_no_default_test(void *arg)
+{
+	struct basic_test_data *data = arg;
+	struct event_base *base = data->base;
+	struct evdns_base *dns = NULL;
+	int ok = access(RESOLV_FILE, R_OK);
+
+	tt_assert(ok);
+
+	dns = evdns_base_new(base, 0);
+	tt_assert(dns);
+	tt_int_op(evdns_base_get_nameserver_addr(dns, 0, NULL, 0), ==, -1);
+
+	/* We cannot test
+	 * EVDNS_BASE_INITIALIZE_NAMESERVERS|EVDNS_BASE_NAMESERVERS_NO_DEFAULT
+	 * because we cannot mock "/etc/resolv.conf" (yet). */
+
+	evdns_base_resolv_conf_parse(dns,
+		DNS_OPTIONS_ALL|DNS_OPTION_NAMESERVERS_NO_DEFAULT, RESOLV_FILE);
+	tt_int_op(evdns_base_get_nameserver_addr(dns, 0, NULL, 0), ==, -1);
+
+	evdns_base_resolv_conf_parse(dns, DNS_OPTIONS_ALL, RESOLV_FILE);
+	tt_int_op(evdns_base_get_nameserver_addr(dns, 0, NULL, 0), ==, sizeof(struct sockaddr));
+
+end:
+	if (dns)
+		evdns_base_free(dns, 0);
+}
+#endif
+
 /* === Test for bufferevent_socket_connect_hostname */
 
 static int total_connected_or_failed = 0;
@@ -1017,7 +1073,7 @@ be_getaddrinfo_server_cb(struct evdns_server_request *req, void *data)
 	int added_any=0;
 	++*n_got_p;
 
-	for (i=0;i<req->nquestions;++i) {
+	for (i = 0; i < req->nquestions; ++i) {
 		const int qtype = req->questions[i]->type;
 		const int qclass = req->questions[i]->dns_question_class;
 		const char *qname = req->questions[i]->name;
@@ -1193,10 +1249,20 @@ be_connect_hostname_event_cb(struct bufferevent *bev, short what, void *ctx)
 	}
 }
 
+static int bev_connect_hostname(struct bufferevent *bev, struct evdns_base *dns,
+    struct evutil_addrinfo *hints, const char *host, int port)
+{
+	if (hints->ai_flags)
+		return bufferevent_socket_connect_hostname_hints(bev, dns, hints, host, port);
+	else
+		return bufferevent_socket_connect_hostname(bev, dns, AF_INET, host, port);
+}
 static void
 test_bufferevent_connect_hostname(void *arg)
 {
 	struct basic_test_data *data = arg;
+	int emfile = data->setup_data && !strcmp(data->setup_data, "emfile");
+	int hints  = data->setup_data && !strcmp(data->setup_data, "hints");
 	struct evconnlistener *listener = NULL;
 	struct bufferevent *be[5];
 	struct be_conn_hostname_result be_outcome[ARRAY_SIZE(be)];
@@ -1208,13 +1274,16 @@ test_bufferevent_connect_hostname(void *arg)
 	ev_uint16_t dns_port=0;
 	int n_accept=0, n_dns=0;
 	char buf[128];
-	int emfile = data->setup_data && !strcmp(data->setup_data, "emfile");
-	int success = BEV_EVENT_CONNECTED;
-	int default_error = 0;
+	unsigned i;
+	int ret;
+	struct evutil_addrinfo in_hints;
 
-	if (emfile) {
-		success = BEV_EVENT_ERROR;
-		default_error = EVUTIL_EAI_SYSTEM;
+	memset(&in_hints, 0, sizeof(in_hints));
+	if (hints) {
+		in_hints.ai_family = AF_INET;
+		in_hints.ai_protocol = IPPROTO_TCP;
+		in_hints.ai_socktype = SOCK_STREAM;
+		in_hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
 	}
 
 	be_connect_hostname_base = data->base;
@@ -1257,7 +1326,7 @@ test_bufferevent_connect_hostname(void *arg)
 	/* Now, finally, at long last, launch the bufferevents.	 One should do
 	 * a failing lookup IP, one should do a successful lookup by IP,
 	 * and one should do a successful lookup by hostname. */
-	for (int i = 0; i < ARRAY_SIZE(be); ++i) {
+	for (i = 0; i < ARRAY_SIZE(be); ++i) {
 		memset(&be_outcome[i], 0, sizeof(be_outcome[i]));
 		be[i] = bufferevent_socket_new(data->base, -1, BEV_OPT_CLOSE_ON_FREE);
 		bufferevent_setcb(be[i], NULL, NULL, be_connect_hostname_event_cb,
@@ -1266,10 +1335,10 @@ test_bufferevent_connect_hostname(void *arg)
 
 	/* Use the blocking resolver.  This one will fail if your resolver
 	 * can't resolve localhost to 127.0.0.1 */
-	tt_assert(!bufferevent_socket_connect_hostname(be[3], NULL, AF_INET,
+	tt_assert(!bev_connect_hostname(be[3], NULL, &in_hints,
 		"localhost", listener_port));
 	/* Use the blocking resolver with a nonexistent hostname. */
-	tt_assert(!bufferevent_socket_connect_hostname(be[4], NULL, AF_INET,
+	tt_assert(!bev_connect_hostname(be[4], NULL, &in_hints,
 		"nonesuch.nowhere.example.com", 80));
 	{
 		/* The blocking resolver will use the system nameserver, which
@@ -1284,25 +1353,39 @@ test_bufferevent_connect_hostname(void *arg)
 			"nonesuch.nowhere.example.com", "80", &hints, &ai);
 	}
 	/* Launch an async resolve that will fail. */
-	tt_assert(!bufferevent_socket_connect_hostname(be[0], dns, AF_INET,
+	tt_assert(!bev_connect_hostname(be[0], dns, &in_hints,
 		"nosuchplace.example.com", listener_port));
 	/* Connect to the IP without resolving. */
-	tt_assert(!bufferevent_socket_connect_hostname(be[1], dns, AF_INET,
+	tt_assert(!bev_connect_hostname(be[1], dns, &in_hints,
 		"127.0.0.1", listener_port));
 	/* Launch an async resolve that will succeed. */
-	tt_assert(!bufferevent_socket_connect_hostname(be[2], dns, AF_INET,
+	tt_assert(!bev_connect_hostname(be[2], dns, &in_hints,
 		"nobodaddy.example.com", listener_port));
 
-	event_base_dispatch(data->base);
+	ret = event_base_dispatch(data->base);
+#ifdef __sun__
+	if (emfile && !strcmp(event_base_get_method(data->base), "devpoll")) {
+		tt_int_op(ret, ==, -1);
+		/** DP_POLL failed */
+		tt_skip();
+	} else
+#endif
+	{
+		tt_int_op(ret, ==, 0);
+	}
 
 	tt_int_op(be_outcome[0].what, ==, BEV_EVENT_ERROR);
 	tt_int_op(be_outcome[0].dnserr, ==, EVUTIL_EAI_NONAME);
-	tt_int_op(be_outcome[1].what, ==, success);
+	tt_int_op(be_outcome[1].what, ==, !emfile ? BEV_EVENT_CONNECTED : BEV_EVENT_ERROR);
 	tt_int_op(be_outcome[1].dnserr, ==, 0);
-	tt_int_op(be_outcome[2].what, ==, success);
+	tt_int_op(be_outcome[2].what, ==, !emfile ? BEV_EVENT_CONNECTED : BEV_EVENT_ERROR);
 	tt_int_op(be_outcome[2].dnserr, ==, 0);
-	tt_int_op(be_outcome[3].what, ==, success);
-	tt_int_op(be_outcome[3].dnserr, ==, default_error);
+	tt_int_op(be_outcome[3].what, ==, !emfile ? BEV_EVENT_CONNECTED : BEV_EVENT_ERROR);
+	if (!emfile) {
+		tt_int_op(be_outcome[3].dnserr, ==, 0);
+	} else {
+		tt_int_op(be_outcome[3].dnserr, !=, 0);
+	}
 	if (expect_err) {
 		tt_int_op(be_outcome[4].what, ==, BEV_EVENT_ERROR);
 		tt_int_op(be_outcome[4].dnserr, ==, expect_err);
@@ -1322,12 +1405,11 @@ end:
 		evdns_close_server_port(port);
 	if (dns)
 		evdns_base_free(dns, 0);
-	for (int i = 0; i < ARRAY_SIZE(be); ++i) {
+	for (i = 0; i < ARRAY_SIZE(be); ++i) {
 		if (be[i])
 			bufferevent_free(be[i]);
 	}
 }
-
 
 struct gai_outcome {
 	int err;
@@ -1364,7 +1446,7 @@ test_getaddrinfo_async(void *arg)
 	struct evutil_addrinfo hints, *a;
 	struct gai_outcome local_outcome;
 	struct gai_outcome a_out[12];
-	int i;
+	unsigned i;
 	struct evdns_getaddrinfo_request *r;
 	char buf[128];
 	struct evdns_server_port *port = NULL;
@@ -1722,7 +1804,7 @@ test_getaddrinfo_async(void *arg)
 end:
 	if (local_outcome.ai)
 		evutil_freeaddrinfo(local_outcome.ai);
-	for (i=0;i<(int)ARRAY_SIZE(a_out);++i) {
+	for (i = 0; i < ARRAY_SIZE(a_out); ++i) {
 		if (a_out[i].ai)
 			evutil_freeaddrinfo(a_out[i].ai);
 	}
@@ -1996,7 +2078,7 @@ test_getaddrinfo_async_cancel_stress(void *ptr)
 	struct sockaddr_in sin;
 	struct sockaddr_storage ss;
 	ev_socklen_t slen;
-	int i;
+	unsigned i;
 
 	base = event_base_new();
 	dns_base = evdns_base_new(base, 0);
@@ -2051,7 +2133,7 @@ dns_client_fail_requests_test(void *arg)
 	char buf[64];
 
 	struct generic_dns_callback_result r[20];
-	int i;
+	unsigned i;
 
 	dns_port = regress_get_dnsserver(base, &portnum, NULL,
 		regress_dns_server_cb, reissue_table);
@@ -2108,7 +2190,7 @@ dns_client_fail_requests_getaddrinfo_test(void *arg)
 	tt_assert(!evdns_base_nameserver_ip_add(dns, buf));
 
 	for (i = 0; i < 20; ++i)
-		tt_assert(evdns_getaddrinfo(dns, "foof.example.com", "ssh", NULL, getaddrinfo_cb, &r[i]));
+		tt_assert(evdns_getaddrinfo(dns, "foof.example.com", "80", NULL, getaddrinfo_cb, &r[i]));
 
 	n_replies_left = 20;
 	exit_base = base;
@@ -2125,6 +2207,173 @@ end:
 	evdns_close_server_port(dns_port);
 }
 
+#ifdef EVTHREAD_USE_PTHREADS_IMPLEMENTED
+struct race_param
+{
+	void *lock;
+	void *reqs_cmpl_cond;
+	int bw_threads;
+	void *bw_threads_exited_cond;
+	volatile int stopping;
+	void *base;
+	void *dns;
+
+	int locked;
+};
+static void *
+race_base_run(void *arg)
+{
+	struct race_param *rp = (struct race_param *)arg;
+	event_base_loop(rp->base, EVLOOP_NO_EXIT_ON_EMPTY);
+	THREAD_RETURN();
+}
+static void *
+race_busywait_run(void *arg)
+{
+	struct race_param *rp = (struct race_param *)arg;
+	struct sockaddr_storage ss;
+	while (!rp->stopping)
+		evdns_base_get_nameserver_addr(rp->dns, 0, (struct sockaddr *)&ss, sizeof(ss));
+	EVLOCK_LOCK(rp->lock, 0);
+	if (--rp->bw_threads == 0)
+		EVTHREAD_COND_SIGNAL(rp->bw_threads_exited_cond);
+	EVLOCK_UNLOCK(rp->lock, 0);
+	THREAD_RETURN();
+}
+static void
+race_gai_cb(int result, struct evutil_addrinfo *res, void *arg)
+{
+	struct race_param *rp = arg;
+	(void)result;
+	(void)res;
+
+	--n_replies_left;
+	if (n_replies_left == 0) {
+		EVLOCK_LOCK(rp->lock, 0);
+		EVTHREAD_COND_SIGNAL(rp->reqs_cmpl_cond);
+		EVLOCK_UNLOCK(rp->lock, 0);
+	}
+}
+static void
+getaddrinfo_race_gotresolve_test(void *arg)
+{
+	struct race_param rp;
+	struct evdns_server_port *dns_port = NULL;
+	ev_uint16_t portnum = 0;
+	char buf[64];
+	int i;
+
+	// Some stress is needed to yield inside getaddrinfo between resolve_ipv4 and resolve_ipv6
+	int n_reqs = 16384;
+#ifdef _SC_NPROCESSORS_ONLN
+	int n_threads = sysconf(_SC_NPROCESSORS_ONLN) + 1;
+#else
+	int n_threads = 17;
+#endif
+	THREAD_T thread[n_threads];
+	struct timeval tv;
+
+	(void)arg;
+
+	evthread_use_pthreads();
+
+	rp.base = event_base_new();
+	tt_assert(rp.base);
+	if (evthread_make_base_notifiable(rp.base) < 0)
+		tt_abort_msg("Couldn't make base notifiable!");
+
+	dns_port = regress_get_dnsserver(rp.base, &portnum, NULL,
+									 regress_dns_server_cb, reissue_table);
+	tt_assert(dns_port);
+
+	evutil_snprintf(buf, sizeof(buf), "127.0.0.1:%d", (int)portnum);
+
+	rp.dns = evdns_base_new(rp.base, 0);
+	tt_assert(!evdns_base_nameserver_ip_add(rp.dns, buf));
+
+	n_replies_left = n_reqs;
+
+	EVTHREAD_ALLOC_LOCK(rp.lock, 0);
+	EVTHREAD_ALLOC_COND(rp.reqs_cmpl_cond);
+	EVTHREAD_ALLOC_COND(rp.bw_threads_exited_cond);
+	tt_assert(rp.lock);
+	tt_assert(rp.reqs_cmpl_cond);
+	tt_assert(rp.bw_threads_exited_cond);
+	rp.bw_threads = 0;
+	rp.stopping = 0;
+
+	// Run resolver thread
+	THREAD_START(thread[0], race_base_run, &rp);
+	// Run busy-wait threads used to force yield this thread
+	for (i = 1; i < n_threads; i++) {
+		rp.bw_threads++;
+		THREAD_START(thread[i], race_busywait_run, &rp);
+	}
+
+	EVLOCK_LOCK(rp.lock, 0);
+	rp.locked = 1;
+
+	for (i = 0; i < n_reqs; ++i) {
+		tt_assert(evdns_getaddrinfo(rp.dns, "foof.example.com", "80", NULL, race_gai_cb, &rp));
+		// This magic along with busy-wait threads make this thread yield frequently
+		if (i % 100 == 0) {
+			tv.tv_sec = 0;
+			tv.tv_usec = 10000;
+			evutil_usleep_(&tv);
+		}
+	}
+
+	exit_base = rp.base;
+
+	// Wait for some time
+	tv.tv_sec = 5;
+	tv.tv_usec = 0;
+	EVTHREAD_COND_WAIT_TIMED(rp.reqs_cmpl_cond, rp.lock, &tv);
+
+	// Stop busy-wait threads
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+	rp.stopping = 1;
+	tt_assert(EVTHREAD_COND_WAIT_TIMED(rp.bw_threads_exited_cond, rp.lock, &tv) == 0);
+
+	EVLOCK_UNLOCK(rp.lock, 0);
+	rp.locked = 0;
+
+	evdns_base_free(rp.dns, 1 /** fail requests */);
+
+	tt_int_op(n_replies_left, ==, 0);
+
+end:
+	if (rp.locked)
+		EVLOCK_UNLOCK(rp.lock, 0);
+	EVTHREAD_FREE_LOCK(rp.lock, 0);
+	EVTHREAD_FREE_COND(rp.reqs_cmpl_cond);
+	EVTHREAD_FREE_COND(rp.bw_threads_exited_cond);
+	evdns_close_server_port(dns_port);
+	event_base_loopbreak(rp.base);
+	event_base_free(rp.base);
+}
+#endif
+
+static void
+test_set_so_rcvbuf_so_sndbuf(void *arg)
+{
+	struct basic_test_data *data = arg;
+	struct evdns_base *dns_base;
+
+	dns_base = evdns_base_new(data->base, 0);
+	tt_assert(dns_base);
+
+	tt_assert(!evdns_base_set_option(dns_base, "so-rcvbuf", "10240"));
+	tt_assert(!evdns_base_set_option(dns_base, "so-sndbuf", "10240"));
+
+	/* actually check SO_RCVBUF/SO_SNDBUF not fails */
+	tt_assert(!evdns_base_nameserver_ip_add(dns_base, "127.0.0.1"));
+
+end:
+	if (dns_base)
+		evdns_base_free(dns_base, 0);
+}
 
 #define DNS_LEGACY(name, flags)					       \
 	{ #name, run_legacy_test_fn, flags|TT_LEGACY, &legacy_setup,   \
@@ -2154,10 +2403,19 @@ struct testcase_t dns_testcases[] = {
 	{ "bufferevent_connect_hostname_emfile", test_bufferevent_connect_hostname,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, (char*)"emfile" },
 #endif
+	{ "bufferevent_connect_hostname_hints", test_bufferevent_connect_hostname,
+	  TT_FORK|TT_NEED_BASE, &basic_setup, (char*)"hints" },
 	{ "disable_when_inactive", dns_disable_when_inactive_test,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
 	{ "disable_when_inactive_no_ns", dns_disable_when_inactive_no_ns_test,
+	  TT_FORK|TT_NEED_BASE|TT_NO_LOGS, &basic_setup, NULL },
+
+	{ "initialize_nameservers", dns_initialize_nameservers_test,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
+#ifndef _WIN32
+	{ "nameservers_no_default", dns_nameservers_no_default_test,
+	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
+#endif
 
 	{ "getaddrinfo_async", test_getaddrinfo_async,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, (char*)"" },
@@ -2178,9 +2436,17 @@ struct testcase_t dns_testcases[] = {
 #endif
 
 	{ "client_fail_requests", dns_client_fail_requests_test,
-	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
+	  TT_FORK|TT_NEED_BASE|TT_NO_LOGS, &basic_setup, NULL },
 	{ "client_fail_requests_getaddrinfo",
 	  dns_client_fail_requests_getaddrinfo_test,
+	  TT_FORK|TT_NEED_BASE|TT_NO_LOGS, &basic_setup, NULL },
+#ifdef EVTHREAD_USE_PTHREADS_IMPLEMENTED
+	{ "getaddrinfo_race_gotresolve",
+	  getaddrinfo_race_gotresolve_test,
+	  TT_FORK|TT_OFF_BY_DEFAULT, NULL, NULL },
+#endif
+
+	{ "set_SO_RCVBUF_SO_SNDBUF", test_set_so_rcvbuf_so_sndbuf,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
 
 	END_OF_TESTCASES

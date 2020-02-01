@@ -52,10 +52,14 @@
 #include <string.h>
 #include <time.h>
 #include <limits.h>
+#ifdef EVENT__HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
 
 #include "event2/event.h"
 #include "event2/event_struct.h"
 #include "event2/event_compat.h"
+#include "event2/watch.h"
 #include "event-internal.h"
 #include "defer-internal.h"
 #include "evthread-internal.h"
@@ -245,9 +249,8 @@ static void event_debug_note_setup_(const struct event *ev)
 {
 	struct event_debug_entry *dent, find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		goto out;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -273,9 +276,8 @@ static void event_debug_note_teardown_(const struct event *ev)
 {
 	struct event_debug_entry *dent, find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		goto out;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -292,9 +294,8 @@ static void event_debug_note_add_(const struct event *ev)
 {
 	struct event_debug_entry *dent,find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		goto out;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -319,9 +320,8 @@ static void event_debug_note_del_(const struct event *ev)
 {
 	struct event_debug_entry *dent, find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		goto out;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -346,9 +346,8 @@ static void event_debug_assert_is_setup_(const struct event *ev)
 {
 	struct event_debug_entry *dent, find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		return;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -368,9 +367,8 @@ static void event_debug_assert_not_added_(const struct event *ev)
 {
 	struct event_debug_entry *dent, find;
 
-	if (!event_debug_mode_on_) {
+	if (!event_debug_mode_on_)
 		return;
-	}
 
 	find.ptr = ev;
 	EVLOCK_LOCK(event_debug_map_lock_, 0);
@@ -385,6 +383,22 @@ static void event_debug_assert_not_added_(const struct event *ev)
 	}
 	EVLOCK_UNLOCK(event_debug_map_lock_, 0);
 }
+static void event_debug_assert_socket_nonblocking_(evutil_socket_t fd)
+{
+	if (!event_debug_mode_on_)
+		return;
+	if (fd < 0)
+		return;
+
+#ifndef _WIN32
+	{
+		int flags;
+		if ((flags = fcntl(fd, F_GETFL, NULL)) >= 0) {
+			EVUTIL_ASSERT(flags & O_NONBLOCK);
+		}
+	}
+#endif
+}
 #else
 static void event_debug_note_setup_(const struct event *ev) { (void)ev; }
 static void event_debug_note_teardown_(const struct event *ev) { (void)ev; }
@@ -392,6 +406,7 @@ static void event_debug_note_add_(const struct event *ev) { (void)ev; }
 static void event_debug_note_del_(const struct event *ev) { (void)ev; }
 static void event_debug_assert_is_setup_(const struct event *ev) { (void)ev; }
 static void event_debug_assert_not_added_(const struct event *ev) { (void)ev; }
+static void event_debug_assert_socket_nonblocking_(evutil_socket_t fd) { (void)fd; }
 #endif
 
 #define EVENT_BASE_ASSERT_LOCKED(base)		\
@@ -777,6 +792,10 @@ event_base_new_with_config(const struct event_config *cfg)
 		event_base_start_iocp_(base, cfg->n_cpus_hint);
 #endif
 
+	/* initialize watcher lists */
+	for (i = 0; i < EVWATCH_MAX; ++i)
+		TAILQ_INIT(&base->watchers[i]);
+
 	return (base);
 }
 
@@ -880,8 +899,10 @@ static int event_base_free_queues_(struct event_base *base, int run_finalizers)
 static void
 event_base_free_(struct event_base *base, int run_finalizers)
 {
-	int i, n_deleted=0;
+	int i;
+	size_t n_deleted=0;
 	struct event *ev;
+	struct evwatch *watcher;
 	/* XXXX grab the lock? If there is contention when one thread frees
 	 * the base, then the contending thread will be very sad soon. */
 
@@ -947,6 +968,7 @@ event_base_free_(struct event_base *base, int run_finalizers)
 		 * A simple case is bufferevent with underlying (i.e. filters).
 		 */
 		int i = event_base_free_queues_(base, run_finalizers);
+		event_debug(("%s: %d events freed", __func__, i));
 		if (!i) {
 			break;
 		}
@@ -954,7 +976,7 @@ event_base_free_(struct event_base *base, int run_finalizers)
 	}
 
 	if (n_deleted)
-		event_debug(("%s: %d events were still set in base",
+		event_debug(("%s: "EV_SIZE_FMT" events were still set in base",
 			__func__, n_deleted));
 
 	while (LIST_FIRST(&base->once_events)) {
@@ -980,6 +1002,15 @@ event_base_free_(struct event_base *base, int run_finalizers)
 
 	EVTHREAD_FREE_LOCK(base->th_base_lock, 0);
 	EVTHREAD_FREE_COND(base->current_event_cond);
+
+	/* Free all event watchers */
+	for (i = 0; i < EVWATCH_MAX; ++i) {
+		while (!TAILQ_EMPTY(&base->watchers[i])) {
+			watcher = TAILQ_FIRST(&base->watchers[i]);
+			TAILQ_REMOVE(&base->watchers[i], watcher, next);
+			mm_free(watcher);
+		}
+	}
 
 	/* If we're freeing current_base, there won't be a current_base. */
 	if (base == current_base)
@@ -1792,8 +1823,8 @@ event_process_active_single_queue(struct event_base *base,
 			evcb_evfinalize = ev->ev_evcallback.evcb_cb_union.evcb_evfinalize;
 			EVUTIL_ASSERT((evcb->evcb_flags & EVLIST_FINALIZING));
 			EVBASE_RELEASE_LOCK(base, th_base_lock);
-			evcb_evfinalize(ev, ev->ev_arg);
 			event_debug_note_teardown_(ev);
+			evcb_evfinalize(ev, ev->ev_arg);
 			if (evcb_closure == EV_CLOSURE_EVENT_FINALIZE_FREE)
 				mm_free(ev);
 		}
@@ -2030,12 +2061,15 @@ event_base_loop(struct event_base *base, int flags)
 	struct timeval tv;
 	struct timeval *tv_p;
 	int res, done, retval = 0;
+	struct evwatch_prepare_cb_info prepare_info;
+	struct evwatch_check_cb_info check_info;
+	struct evwatch *watcher;
 
     // zhou: the lock will be freed just before like "select()" was invoked.
     //       Very similar to condition variable's mutex lock.
 
 	/* Grab the lock.  We will release it inside evsel.dispatch, and again
-	 * as we invoke user callbacks. */
+	 * as we invoke watchers and user callbacks. */
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 
 	if (base->running_loop) {
@@ -2104,6 +2138,14 @@ event_base_loop(struct event_base *base, int flags)
         //     it will cause a lot of latency if no more events happen!!!
 		event_queue_make_later_events_active(base);
 
+		/* Invoke prepare watchers before polling for events */
+		prepare_info.timeout = tv_p;
+		TAILQ_FOREACH(watcher, &base->watchers[EVWATCH_PREPARE], next) {
+			EVBASE_RELEASE_LOCK(base, th_base_lock);
+			(*watcher->callback.prepare)(watcher, &prepare_info, watcher->arg);
+			EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+		}
+
         // zhou: make it possible to update cached time when user fetch it later
 		clear_time_cache(base);
 
@@ -2119,6 +2161,15 @@ event_base_loop(struct event_base *base, int flags)
 
         // zhou: forcly update cached time
 		update_time_cache(base);
+
+		/* Invoke check watchers after polling for events, and before
+		 * processing them */
+		TAILQ_FOREACH(watcher, &base->watchers[EVWATCH_CHECK], next) {
+			EVBASE_RELEASE_LOCK(base, th_base_lock);
+			(*watcher->callback.check)(watcher, &check_info, watcher->arg);
+			EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+		}
+
 
         // zhou: just move expired timer to active event queue
 		timeout_process(base);
@@ -2243,6 +2294,9 @@ event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, shor
 		base = current_base;
 	if (arg == &event_self_cbarg_ptr_)
 		arg = ev;
+
+	if (!(events & EV_SIGNAL))
+		event_debug_assert_socket_nonblocking_(fd);
 
     // zhou: check whether the event was added before, because "ev" maybe passed by user.
 	event_debug_assert_not_added_(ev);
@@ -3910,7 +3964,7 @@ event_base_foreach_event_nolock_(struct event_base *base,
     event_base_foreach_event_cb fn, void *arg)
 {
 	int r, i;
-	unsigned u;
+	size_t u;
 	struct event *ev;
 
 	/* Start out with all the EVLIST_INSERTED events. */
@@ -3977,13 +4031,14 @@ dump_inserted_event_fn(const struct event_base *base, const struct event *e, voi
 	if (! (e->ev_flags & (EVLIST_INSERTED|EVLIST_TIMEOUT)))
 		return 0;
 
-	fprintf(output, "  %p [%s "EV_SOCK_FMT"]%s%s%s%s%s%s",
+	fprintf(output, "  %p [%s "EV_SOCK_FMT"]%s%s%s%s%s%s%s",
 	    (void*)e, gloss, EV_SOCK_ARG(e->ev_fd),
 	    (e->ev_events&EV_READ)?" Read":"",
 	    (e->ev_events&EV_WRITE)?" Write":"",
 	    (e->ev_events&EV_CLOSED)?" EOF":"",
 	    (e->ev_events&EV_SIGNAL)?" Signal":"",
 	    (e->ev_events&EV_PERSIST)?" Persist":"",
+	    (e->ev_events&EV_ET)?" ET":"",
 	    (e->ev_flags&EVLIST_INTERNAL)?" Internal":"");
 	if (e->ev_flags & EVLIST_TIMEOUT) {
 		struct timeval tv;
@@ -4055,7 +4110,35 @@ void
 event_base_active_by_fd(struct event_base *base, evutil_socket_t fd, short events)
 {
 	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
-	evmap_io_active_(base, fd, events & (EV_READ|EV_WRITE|EV_CLOSED));
+
+	/* Activate any non timer events */
+	if (!(events & EV_TIMEOUT)) {
+		evmap_io_active_(base, fd, events & (EV_READ|EV_WRITE|EV_CLOSED));
+	} else {
+		/* If we want to activate timer events, loop and activate each event with
+		 * the same fd in both the timeheap and common timeouts list */
+		int i;
+		size_t u;
+		struct event *ev;
+
+		for (u = 0; u < base->timeheap.n; ++u) {
+			ev = base->timeheap.p[u];
+			if (ev->ev_fd == fd) {
+				event_active_nolock_(ev, EV_TIMEOUT, 1);
+			}
+		}
+
+		for (i = 0; i < base->n_common_timeouts; ++i) {
+			struct common_timeout_list *ctl = base->common_timeout_queues[i];
+			TAILQ_FOREACH(ev, &ctl->events,
+				ev_timeout_pos.ev_next_with_common_timeout) {
+				if (ev->ev_fd == fd) {
+					event_active_nolock_(ev, EV_TIMEOUT, 1);
+				}
+			}
+		}
+	}
+
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 }
 
@@ -4165,20 +4248,21 @@ void
 event_base_assert_ok_nolock_(struct event_base *base)
 {
 	int i;
+	size_t u;
 	int count;
 
 	/* First do checks on the per-fd and per-signal lists */
 	evmap_check_integrity_(base);
 
 	/* Check the heap property */
-	for (i = 1; i < (int)base->timeheap.n; ++i) {
-		int parent = (i - 1) / 2;
+	for (u = 1; u < base->timeheap.n; ++u) {
+		size_t parent = (u - 1) / 2;
 		struct event *ev, *p_ev;
-		ev = base->timeheap.p[i];
+		ev = base->timeheap.p[u];
 		p_ev = base->timeheap.p[parent];
 		EVUTIL_ASSERT(ev->ev_flags & EVLIST_TIMEOUT);
 		EVUTIL_ASSERT(evutil_timercmp(&p_ev->ev_timeout, &ev->ev_timeout, <=));
-		EVUTIL_ASSERT(ev->ev_timeout_pos.min_heap_idx == i);
+		EVUTIL_ASSERT(ev->ev_timeout_pos.min_heap_idx == u);
 	}
 
 	/* Check that the common timeouts are fine */

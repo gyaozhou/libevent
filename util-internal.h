@@ -52,24 +52,38 @@ extern "C" {
 
 /* __has_attribute() wrapper */
 #ifdef __has_attribute
-#define EVUTIL_HAS_ATTRIBUTE __has_attribute
+# define EVUTIL_HAS_ATTRIBUTE __has_attribute
 #endif
 /** clang 3 __has_attribute misbehaves in some versions */
-#if defined(__clang__) && \
-	__clang__ == 1 && __clang_major__ == 3 && \
-	(__clang_minor__ >= 2 && __clang_minor__ <= 5)
-#undef EVUTIL_HAS_ATTRIBUTE
-#endif
+#if defined(__clang__) && __clang__ == 1
+# if defined(__apple_build_version__)
+#  if __clang_major__ <= 6
+#   undef EVUTIL_HAS_ATTRIBUTE
+#  endif
+# else /* !__apple_build_version__ */
+#  if __clang_major__ == 3 && __clang_minor__ >= 2 && __clang_minor__ <= 5
+#   undef EVUTIL_HAS_ATTRIBUTE
+#  endif
+# endif /* __apple_build_version__ */
+#endif /*\ defined(__clang__) && __clang__ == 1 */
 #ifndef EVUTIL_HAS_ATTRIBUTE
-#define EVUTIL_HAS_ATTRIBUTE(x) 0
+# define EVUTIL_HAS_ATTRIBUTE(x) 0
 #endif
 
 /* If we need magic to say "inline", get it for free internally. */
 #ifdef EVENT__inline
 #define inline EVENT__inline
 #endif
-#if defined(EVENT____func__) && !defined(__func__)
-#define __func__ EVENT____func__
+
+/* Define to appropriate substitute if compiler doesnt have __func__ */
+#if defined(EVENT__HAVE___func__)
+# ifndef __func__
+#  define __func__ __func__
+# endif
+#elif defined(EVENT__HAVE___FUNCTION__)
+# define __func__ __FUNCTION__
+#else
+# define __func__ __FILE__
 #endif
 
 /* A good no-op to use in macro definitions. */
@@ -287,6 +301,11 @@ EVENT2_EXPORT_SYMBOL
 int evutil_socket_connect_(evutil_socket_t *fd_ptr, const struct sockaddr *sa, int socklen);
 
 int evutil_socket_finished_connecting_(evutil_socket_t fd);
+
+#ifdef EVENT__HAVE_AFUNIX_H
+EVENT2_EXPORT_SYMBOL
+int evutil_check_working_afunix_();
+#endif
 
 EVENT2_EXPORT_SYMBOL
 int evutil_ersatz_socketpair_(int, int , int, evutil_socket_t[]);
@@ -518,6 +537,17 @@ evutil_socket_t evutil_eventfd_(unsigned initval, int flags);
 #endif
 
 void evutil_memclear_(void *mem, size_t len);
+
+struct in_addr;
+struct in6_addr;
+
+/* This is a any, loopback, link-local, multicast */
+EVENT2_EXPORT_SYMBOL
+int evutil_v4addr_is_local_(const struct in_addr *in);
+/* This is a reserved, ipv4compat, ipv4map, loopback,
+ * link-local, multicast, or unspecified address. */
+EVENT2_EXPORT_SYMBOL
+int evutil_v6addr_is_local_(const struct in6_addr *in);
 
 #ifdef __cplusplus
 }

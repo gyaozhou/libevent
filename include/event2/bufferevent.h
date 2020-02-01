@@ -30,8 +30,9 @@
 /**
    @file event2/bufferevent.h
 
-  Functions for buffering data for network sending or receiving.  Bufferevents
-  are higher level than evbuffers: each has an underlying evbuffer for reading
+  @brief Functions for buffering data for network sending or receiving.
+
+  Bufferevents are higher level than evbuffers: each has an underlying evbuffer for reading
   and one for writing, and callbacks that are invoked under certain
   circumstances.
 
@@ -209,7 +210,7 @@ struct bufferevent *bufferevent_socket_new(struct event_base *base, evutil_socke
    @return 0 on success, -1 on failure.
  */
 EVENT2_EXPORT_SYMBOL
-int bufferevent_socket_connect(struct bufferevent *, const struct sockaddr *, int);
+int bufferevent_socket_connect(struct bufferevent *bufev, const struct sockaddr *addr, int socklen);
 
 struct evdns_base;
 /**
@@ -227,6 +228,26 @@ struct evdns_base;
    @param port The port to connect to on the resolved address.
    @return 0 if successful, -1 on failure.
 
+   @see bufferevent_socket_connect_hostname_hints()
+ */
+EVENT2_EXPORT_SYMBOL
+int bufferevent_socket_connect_hostname(struct bufferevent *bufev,
+    struct evdns_base *evdns_base, int family, const char *hostname, int port);
+
+/**
+   Resolve the hostname 'hostname' and connect to it as with
+   bufferevent_socket_connect().
+
+   @param bufev An existing bufferevent allocated with bufferevent_socket_new()
+   @param evdns_base Optionally, an evdns_base to use for resolving hostnames
+      asynchronously. May be set to NULL for a blocking resolve.
+   @param hints_in points to an addrinfo structure that specifies criteria for
+      selecting the socket address structures to be used
+   @param hostname The hostname to resolve; see below for notes on recognized
+      formats
+   @param port The port to connect to on the resolved address.
+   @return 0 if successful, -1 on failure.
+
    Recognized hostname formats are:
 
        www.example.com	(hostname)
@@ -239,8 +260,9 @@ struct evdns_base;
    what you want.
  */
 EVENT2_EXPORT_SYMBOL
-int bufferevent_socket_connect_hostname(struct bufferevent *,
-    struct evdns_base *, int, const char *, int);
+int bufferevent_socket_connect_hostname_hints(struct bufferevent *bufev,
+    struct evdns_base *evdns_base, const struct evutil_addrinfo *hints_in, const char *hostname, int port);
+
 
 /**
    Return the error code for the last failed DNS lookup attempt made by
@@ -491,7 +513,7 @@ short bufferevent_get_enabled(struct bufferevent *bufev);
 
   (In other words, if reading or writing is disabled, or if the
   bufferevent's read or write operation has been suspended because
-  there's no data to write, or not enough banwidth, or so on, the
+  there's no data to write, or not enough bandwidth, or so on, the
   timeout isn't active.  The timeout only becomes active when we we're
   willing to actually read or write.)
 
@@ -518,6 +540,9 @@ int bufferevent_set_timeouts(struct bufferevent *bufev,
   On input, a bufferevent does not invoke the user read callback unless
   there is at least low watermark data in the buffer.	If the read buffer
   is beyond the high watermark, the bufferevent stops reading from the network.
+  But be aware that bufferevent input/read buffer can overrun high watermark
+  limit (typical example is openssl bufferevent), so you should not relay in
+  this.
 
   On output, the user write callback is invoked whenever the buffered data
   falls below the low watermark.  Filters that write to this bufev will try
@@ -566,7 +591,7 @@ void bufferevent_unlock(struct bufferevent *bufev);
 /**
  * Public interface to manually increase the reference count of a bufferevent
  * this is useful in situations where a user may reference the bufferevent
- * somewhere eles (unknown to libevent)
+ * somewhere else (unknown to libevent)
  *
  * @param bufev the bufferevent to increase the refcount on
  *
@@ -799,7 +824,7 @@ void ev_token_bucket_cfg_free(struct ev_token_bucket_cfg *cfg);
    They are: socket-based bufferevents (normal and IOCP-based), and SSL-based
    bufferevents.
 
-   Return 0 on sucess, -1 on failure.
+   Return 0 on success, -1 on failure.
  */
 EVENT2_EXPORT_SYMBOL
 int bufferevent_set_rate_limit(struct bufferevent *bev,
@@ -850,7 +875,7 @@ int bufferevent_rate_limit_group_set_cfg(
 
    The default min-share is currently 64 bytes.
 
-   Returns 0 on success, -1 on faulre.
+   Returns 0 on success, -1 on failure.
  */
 EVENT2_EXPORT_SYMBOL
 int bufferevent_rate_limit_group_set_min_share(
@@ -887,6 +912,8 @@ int bufferevent_remove_from_rate_limit_group(struct bufferevent *bev);
    Set to 0 for a reasonable default.
 
    Return 0 on success and -1 on failure.
+
+   @see evbuffer_set_max_read()
  */
 EVENT2_EXPORT_SYMBOL
 int bufferevent_set_max_single_read(struct bufferevent *bev, size_t size);
