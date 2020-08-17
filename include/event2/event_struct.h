@@ -69,7 +69,7 @@ extern "C" {
 #define EVLIST_INTERNAL	    0x10
 // zhou: state "active" and "active_later_queue"
 #define EVLIST_ACTIVE_LATER 0x20
-// zhou: performing finalizing??o
+// zhou: performing finalizing??
 #define EVLIST_FINALIZING   0x40
 // zhou: only be removed and meaningfull in debug mode, to mark event useless
 // zhou: state "initialized"
@@ -116,6 +116,8 @@ struct name {								\
 
 struct event;
 
+// zhou: this is a context used by deferred task, add some extra content on user's
+//       context.
 struct event_callback {
 	TAILQ_ENTRY(event_callback) evcb_active_next;
 
@@ -123,7 +125,10 @@ struct event_callback {
 	short evcb_flags;
 	ev_uint8_t evcb_pri;	/* smaller numbers are higher priority */
 
-    // zhou: indicate which callback function below, will be used
+    // zhou: indicate which type callback function below, will be used.
+    //       By this way, make deferred task can handle different type user's
+    //       callback function.
+    //       In C++11, std::bind and std::funtion are better solution.
 	ev_uint8_t evcb_closure;
 	/* allows us to adopt for different types of events */
         union {
@@ -133,6 +138,7 @@ struct event_callback {
 		void (*evcb_evfinalize)(struct event *, void *);
 		void (*evcb_cbfinalize)(struct event_callback *, void *);
 	} evcb_cb_union;
+    // zhou: user's callback function argument.
 	void *evcb_arg;
 };
 

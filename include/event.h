@@ -27,6 +27,9 @@
 #ifndef EVENT1_EVENT_H_INCLUDED_
 #define EVENT1_EVENT_H_INCLUDED_
 
+
+// zhou: this header file deprecated in Libeevent 2.x
+
 /** @file event.h
 
   A library for writing event-driven network servers.

@@ -735,10 +735,10 @@ event_base_new_with_config(const struct event_config *cfg)
 		    event_is_method_disabled(eventops[i]->name))
 			continue;
 
-        // zhou: the method we can use, ignore others methods
+        // zhou: the backend method (poll()/epoll()/...) we can use, ignore others methods
 		base->evsel = eventops[i];
 
-        // zhou: init the method we choose
+        // zhou: init the method we choose, why not break the loop???
 		base->evbase = base->evsel->init(base);
 	}
 
@@ -3216,6 +3216,7 @@ event_active_nolock_(struct event *ev, int res, short ncalls)
 	event_callback_activate_nolock_(base, event_to_event_callback(ev));
 }
 
+// zhou: deferred task, common API
 void
 event_active_later_(struct event *ev, int res)
 {
@@ -3661,6 +3662,7 @@ event_queue_insert_active(struct event_base *base, struct event_callback *evcb)
 	    evcb, evcb_active_next);
 }
 
+// zhou: put in deferred queue.
 static void
 event_queue_insert_active_later(struct event_base *base, struct event_callback *evcb)
 {
@@ -3674,7 +3676,9 @@ event_queue_insert_active_later(struct event_base *base, struct event_callback *
 	evcb->evcb_flags |= EVLIST_ACTIVE_LATER;
 	base->event_count_active++;
 	MAX_EVENT_COUNT(base->event_count_active_max, base->event_count_active);
+
 	EVUTIL_ASSERT(evcb->evcb_pri < base->nactivequeues);
+
 	TAILQ_INSERT_TAIL(&base->active_later_queue, evcb, evcb_active_next);
 }
 

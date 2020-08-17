@@ -26,6 +26,15 @@
 #ifndef EVENT2_THREAD_H_INCLUDED_
 #define EVENT2_THREAD_H_INCLUDED_
 
+// zhou: thread library API, libevent provide two implementation:
+//       1. based on pthread, set by event_use_pthreads()
+//       2. based on Windows, set by event_use_windows_threads()
+//
+//       Just like memory allocation, user could provide user defined thread
+//       library to replace these buildin libraries. Notify libevent via
+//       evthread_set_lock_callbacks() / evthread_set_condition_callbacks().
+
+
 /** @file event2/thread.h
 
   @brief Functions for multi-threaded applications using Libevent.
